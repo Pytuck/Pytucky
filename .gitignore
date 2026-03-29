@@ -9,3 +9,4 @@ build/
 *.db
 .mypy_cache/
 .pytest_cache/
+docs/superpowers/
