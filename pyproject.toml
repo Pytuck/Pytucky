@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=64.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pytucky"
+version = "0.1.0"
+description = "Lightweight single-engine Python document database - pytuck format only, no SQL, high-performance embedded storage"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "go9sky"}
+]
+maintainers = [
+    {name = "go9sky"}
+]
+keywords = [
+    "database",
+    "orm",
+    "nosql",
+    "document-database",
+    "python",
+    "lightweight",
+    "pytuck",
+    "pytucky",
+    "embedded-database",
+    "single-engine"
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Database",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+requires-python = ">=3.7"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "mypy>=0.950",
+    "build>=0.7.0",
+    "twine>=4.0.0",
+]
+
+[tool.setuptools]
+packages = ["pytucky", "pytucky.core", "pytucky.common", "pytucky.query", "pytucky.backends"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+pytucky = ["py.typed"]
+
+[tool.black]
+line-length = 100
+target-version = ['py37', 'py38', 'py39', 'py310', 'py311', 'py312']
+
+[tool.mypy]
+python_version = "3.7"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+norecursedirs = ["__pycache__"]
+addopts = "-v"
