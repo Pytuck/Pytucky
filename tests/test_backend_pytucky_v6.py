@@ -1,6 +1,8 @@
 from pathlib import Path
 
 from pytucky import Column, Storage, migrate_pytuck_to_pytucky
+from pytucky.backends.backend_pytucky_v6 import PytuckyBackend
+from pytucky.common.options import BinaryBackendOptions
 
 
 def build_user_storage(file_path: Path, engine: str = 'pytucky') -> Storage:
@@ -106,3 +108,67 @@ def test_can_migrate_pytuck_file_to_pytucky(tmp_path: Path) -> None:
     assert reopened.select('users', 2)['name'] == 'Bob'
     assert reopened.count_rows('users') == 2
     reopened.close()
+
+
+def test_pytucky_incremental_save_preserves_unchanged_tables(tmp_path: Path) -> None:
+    db_path = tmp_path / 'incremental.pytucky'
+
+    storage = Storage(file_path=db_path, engine='pytucky')
+    storage.create_table(
+        'users',
+        [
+            Column(int, name='id', primary_key=True),
+            Column(str, name='name'),
+        ],
+    )
+    storage.create_table(
+        'items',
+        [
+            Column(int, name='id', primary_key=True),
+            Column(str, name='title'),
+        ],
+    )
+    storage.insert('users', {'id': 1, 'name': 'Alice'})
+    storage.insert('items', {'id': 1, 'title': 'Sword'})
+    storage.flush()
+    storage.close()
+
+    original_size = db_path.stat().st_size
+
+    reopened = Storage(file_path=db_path, engine='pytucky')
+    reopened.insert('users', {'id': 2, 'name': 'Bob'})
+    reopened.flush()
+    reopened.close()
+
+    assert db_path.stat().st_size > original_size
+
+    verified = Storage(file_path=db_path, engine='pytucky')
+    assert verified.count_rows('users') == 2
+    assert verified.count_rows('items') == 1
+    assert verified.select('items', 1)['title'] == 'Sword'
+    assert verified.select('users', 2)['name'] == 'Bob'
+    verified.close()
+
+
+def test_pytucky_recovers_from_stale_journal(tmp_path: Path) -> None:
+    db_path = tmp_path / 'recoverable.pytucky'
+
+    storage = build_user_storage(db_path)
+    storage.insert('users', {'id': 1, 'name': 'Alice', 'age': 20})
+    storage.flush()
+    storage.close()
+
+    backend = PytuckyBackend(db_path, BinaryBackendOptions(lazy_load=True))
+    header = backend.pager.read_file_header()
+    journal_path = backend._journal_path()
+    backend._write_journal([0, header.schema_root_page], header.page_count)
+
+    with open(db_path, 'r+b') as handle:
+        handle.seek(0)
+        handle.write(b'\x00' * 4096)
+        handle.flush()
+
+    recovered = Storage(file_path=db_path, engine='pytucky')
+    assert recovered.select('users', 1)['name'] == 'Alice'
+    recovered.close()
+    assert not journal_path.exists()
