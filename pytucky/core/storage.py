@@ -2739,11 +2739,13 @@ class Storage:
                 if table.is_dirty
             }
 
-            # 当前 BinaryBackend.save() 仍会执行全量 checkpoint，
+            # PTK5 后端仍会执行全量 checkpoint，
             # 因此 flush 前必须把所有 lazy 表 materialize，避免未改动表被写成空表。
-            for table in self.tables.values():
-                if table._lazy_loaded:
-                    table._ensure_all_loaded()
+            # PTK6 后端会利用 changed_tables 做增量保存，不需要在这里强制加载未改动表。
+            if self.engine_name == 'pytuck':
+                for table in self.tables.values():
+                    if table._lazy_loaded:
+                        table._ensure_all_loaded()
 
             self.backend.save(self.tables, changed_tables=changed_tables)
             self._dirty = False

@@ -5,11 +5,12 @@ PTK6 / pytucky 页式存储后端。
 - 使用独立魔数 PTKY 与 .pytucky 文件后缀
 - 使用 4KB 固定页、schema 页和数据叶页
 - 支持当前 Storage API 下的最小 load/save/lazy-read 闭环
+- 利用 changed_tables 对变更表做追加式增量保存
 
 说明：
-- 这是 PTK6 的第一阶段实现，不是最终性能形态。
-- 当前仍通过 Storage.flush() 触发 save()，但文件格式已经切换到真正的页式布局，
-  后续可以在此基础上继续增加 B+Tree 分裂、增量写入和 rollback journal。
+- 当前仍未实现真正的 B+Tree 分裂与页内更新。
+- 当前的增量保存策略是：仅为变更表追加新的叶页链，覆盖 schema/header，旧页暂时保留。
+- 通过 rollback journal 保护 header 与 schema 页，确保崩溃后可回滚到上一次一致状态。
 - V1 仅支持显式主键表；无主键表后续再补。
 """
 
@@ -23,7 +24,6 @@ from ..common.exceptions import SerializationError, UnsupportedOperationError
 from .backend_binary import BinaryBackend
 from .base import StorageBackend
 from .pager import (
-    FORMAT_VERSION,
     MAGIC,
     PAGE_SIZE,
     FileHeader,
@@ -42,15 +42,21 @@ if TYPE_CHECKING:
     from ..core.storage import Table
 
 
+_JOURNAL_HEADER_STRUCT = struct.Struct('<4sII')
+_JOURNAL_ENTRY_PAGE_STRUCT = struct.Struct('<I')
+
+
 class PytuckyBackend(StorageBackend):
     """PTK6 页式后端。"""
 
     ENGINE_NAME = 'pytucky'
     FORMAT_VERSION = get_format_version(ENGINE_NAME)
+    JOURNAL_MAGIC = b'PTKJ'
 
     def __init__(self, file_path: Path, options: Any):
         super().__init__(file_path, options)
-        self.file_path = self.file_path.with_suffix('.pytucky') if self.file_path.suffix == '' else self.file_path
+        if self.file_path.suffix.lower() in {'', '.pytuck'}:
+            self.file_path = self.file_path.with_suffix('.pytucky')
         self.pager = Pager(self.file_path)
 
     def exists(self) -> bool:
@@ -59,6 +65,9 @@ class PytuckyBackend(StorageBackend):
     def delete(self) -> None:
         if self.file_path.exists():
             self.file_path.unlink()
+        journal_path = self._journal_path()
+        if journal_path.exists():
+            journal_path.unlink()
 
     def supports_lazy_loading(self) -> bool:
         return bool(getattr(self.options, 'lazy_load', False))
@@ -103,8 +112,27 @@ class PytuckyBackend(StorageBackend):
 
     def save(self, tables: Dict[str, 'Table'], *, changed_tables: Optional[Set[str]] = None) -> None:
         """将当前表数据保存为 PTK6 页式文件。"""
-        del changed_tables  # 第一阶段暂未利用 changed_tables 做增量写入
+        self._recover_from_journal()
 
+        if not self.exists():
+            self._save_full(tables)
+            return
+
+        if changed_tables is None:
+            self._save_full(tables)
+            return
+
+        if not changed_tables:
+            return
+
+        self._save_incremental(tables, changed_tables)
+
+    def save_full(self, tables: Dict[str, 'Table']) -> None:
+        """强制全量保存。"""
+        self._recover_from_journal()
+        self._save_full(tables)
+
+    def _save_full(self, tables: Dict[str, 'Table']) -> None:
         generation = 1
         if self.exists():
             try:
@@ -122,27 +150,16 @@ class PytuckyBackend(StorageBackend):
 
             root_page, table_pages = self._serialize_table_pages(table, start_page_no=len(pages))
             pages.extend(table_pages)
-            schema_entries.append(
-                TableSchemaEntry(
-                    name=table.name,
-                    primary_key=table.primary_key,
-                    comment=table.comment,
-                    next_id=table.next_id,
-                    root_page=root_page,
-                    columns=list(table.columns.values()),
-                )
-            )
+            schema_entries.append(self._table_to_schema_entry(table, root_page))
 
         pages[1] = build_schema_page(schema_entries)
         header = FileHeader(
-            magic=MAGIC,
-            version=self.FORMAT_VERSION,
-            page_size=PAGE_SIZE,
             page_count=len(pages),
             free_list_head=0,
             schema_root_page=1,
             generation=generation,
             flags=0,
+            version=self.FORMAT_VERSION,
         )
         pages[0] = header.pack()
 
@@ -162,8 +179,67 @@ class PytuckyBackend(StorageBackend):
                 temp_path.unlink()
             raise SerializationError(f'Failed to save PTK6 database: {exc}') from exc
 
+    def _save_incremental(self, tables: Dict[str, 'Table'], changed_tables: Set[str]) -> None:
+        """仅为变更表追加新页并覆写 schema/header。"""
+        current_header = self.pager.read_file_header()
+        schema_entries_by_name = {
+            entry.name: entry for entry in self._read_schema_entries(current_header)
+        }
+
+        next_page_no = current_header.page_count
+        appended_pages: List[bytes] = []
+        updated_entries: List[TableSchemaEntry] = []
+
+        for table_name in sorted(tables.keys()):
+            table = tables[table_name]
+            if table.primary_key is None:
+                raise UnsupportedOperationError('PTK6 V1 currently requires explicit primary keys')
+
+            if table_name in changed_tables or table_name not in schema_entries_by_name:
+                root_page, table_pages = self._serialize_table_pages(table, start_page_no=next_page_no)
+                appended_pages.extend(table_pages)
+                next_page_no += len(table_pages)
+            else:
+                root_page = schema_entries_by_name[table_name].root_page
+
+            updated_entries.append(self._table_to_schema_entry(table, root_page))
+
+        schema_page = build_schema_page(updated_entries)
+        new_header = FileHeader(
+            page_count=current_header.page_count + len(appended_pages),
+            free_list_head=current_header.free_list_head,
+            schema_root_page=current_header.schema_root_page,
+            generation=current_header.generation + 1,
+            flags=current_header.flags,
+            version=self.FORMAT_VERSION,
+        )
+
+        self._write_journal(
+            page_numbers=[0, current_header.schema_root_page],
+            original_page_count=current_header.page_count,
+        )
+
+        try:
+            with open(self.file_path, 'r+b') as handle:
+                handle.seek(Pager.page_offset(current_header.page_count))
+                for page in appended_pages:
+                    handle.write(page)
+
+                handle.seek(Pager.page_offset(current_header.schema_root_page))
+                handle.write(schema_page)
+
+                handle.seek(0)
+                handle.write(new_header.pack())
+                handle.flush()
+                os.fsync(handle.fileno())
+        except Exception as exc:
+            raise SerializationError(f'Failed to incrementally save PTK6 database: {exc}') from exc
+
+        self._remove_journal()
+
     def load(self) -> Dict[str, 'Table']:
         """加载 PTK6 文件。"""
+        self._recover_from_journal()
         if not self.exists():
             raise FileNotFoundError(self.file_path)
 
@@ -173,7 +249,7 @@ class PytuckyBackend(StorageBackend):
         if header.version != self.FORMAT_VERSION:
             raise SerializationError(f'Unsupported PTK6 version: {header.version}')
 
-        schema_entries = parse_schema_page(self.pager.read_page(header.schema_root_page))
+        schema_entries = self._read_schema_entries(header)
 
         from ..core.storage import Table
 
@@ -308,6 +384,82 @@ class PytuckyBackend(StorageBackend):
                 yield page_no, cell_offset, cell_payload
 
             page_no = header.right_pointer
+
+    def _read_schema_entries(self, header: Optional[FileHeader] = None) -> List[TableSchemaEntry]:
+        if header is None:
+            header = self.pager.read_file_header()
+        return parse_schema_page(self.pager.read_page(header.schema_root_page))
+
+    def _journal_path(self) -> Path:
+        return self.file_path.with_name(f'.{self.file_path.name}.journal')
+
+    def _write_journal(self, page_numbers: List[int], original_page_count: int) -> None:
+        journal_path = self._journal_path()
+        with open(journal_path, 'wb') as handle:
+            handle.write(
+                _JOURNAL_HEADER_STRUCT.pack(
+                    self.JOURNAL_MAGIC,
+                    original_page_count,
+                    len(page_numbers),
+                )
+            )
+            for page_number in page_numbers:
+                handle.write(_JOURNAL_ENTRY_PAGE_STRUCT.pack(page_number))
+                handle.write(self.pager.read_page(page_number))
+            handle.flush()
+            os.fsync(handle.fileno())
+
+    def _recover_from_journal(self) -> None:
+        journal_path = self._journal_path()
+        if not journal_path.exists():
+            return
+        if not self.file_path.exists():
+            raise SerializationError('PTK6 journal exists but database file is missing')
+
+        with open(journal_path, 'rb') as handle:
+            header_bytes = handle.read(_JOURNAL_HEADER_STRUCT.size)
+            if len(header_bytes) != _JOURNAL_HEADER_STRUCT.size:
+                raise SerializationError('PTK6 journal header is truncated')
+            magic, original_page_count, backup_page_count = _JOURNAL_HEADER_STRUCT.unpack(header_bytes)
+            if magic != self.JOURNAL_MAGIC:
+                raise SerializationError(f'Invalid PTK6 journal magic: {magic!r}')
+
+            backups: List[Tuple[int, bytes]] = []
+            for _ in range(backup_page_count):
+                page_no_bytes = handle.read(_JOURNAL_ENTRY_PAGE_STRUCT.size)
+                if len(page_no_bytes) != _JOURNAL_ENTRY_PAGE_STRUCT.size:
+                    raise SerializationError('PTK6 journal page entry is truncated')
+                page_number = _JOURNAL_ENTRY_PAGE_STRUCT.unpack(page_no_bytes)[0]
+                page_data = handle.read(PAGE_SIZE)
+                if len(page_data) != PAGE_SIZE:
+                    raise SerializationError('PTK6 journal page backup is truncated')
+                backups.append((page_number, page_data))
+
+        with open(self.file_path, 'r+b') as handle:
+            for page_number, page_data in backups:
+                handle.seek(Pager.page_offset(page_number))
+                handle.write(page_data)
+            handle.truncate(Pager.page_offset(original_page_count))
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        journal_path.unlink()
+
+    def _remove_journal(self) -> None:
+        journal_path = self._journal_path()
+        if journal_path.exists():
+            journal_path.unlink()
+
+    @staticmethod
+    def _table_to_schema_entry(table: 'Table', root_page: int) -> TableSchemaEntry:
+        return TableSchemaEntry(
+            name=table.name,
+            primary_key=table.primary_key,
+            comment=table.comment,
+            next_id=table.next_id,
+            root_page=root_page,
+            columns=list(table.columns.values()),
+        )
 
     @staticmethod
     def _encode_record_cell(pk: Any, record: Dict[str, Any], columns: Dict[str, 'Column']) -> bytes:
