@@ -180,14 +180,15 @@ class PytuckyBackend(StorageBackend):
             raise SerializationError(f'Failed to save PTK6 database: {exc}') from exc
 
     def _save_incremental(self, tables: Dict[str, 'Table'], changed_tables: Set[str]) -> None:
-        """仅为变更表追加新页并覆写 schema/header。"""
+        """优先重用旧叶页，对变更表执行按页原地更新。"""
         current_header = self.pager.read_file_header()
         schema_entries_by_name = {
             entry.name: entry for entry in self._read_schema_entries(current_header)
         }
 
         next_page_no = current_header.page_count
-        appended_pages: List[bytes] = []
+        page_writes: List[Tuple[int, bytes]] = []
+        journal_pages: List[int] = [0, current_header.schema_root_page]
         updated_entries: List[TableSchemaEntry] = []
 
         for table_name in sorted(tables.keys()):
@@ -195,18 +196,46 @@ class PytuckyBackend(StorageBackend):
             if table.primary_key is None:
                 raise UnsupportedOperationError('PTK6 V1 currently requires explicit primary keys')
 
-            if table_name in changed_tables or table_name not in schema_entries_by_name:
-                root_page, table_pages = self._serialize_table_pages(table, start_page_no=next_page_no)
-                appended_pages.extend(table_pages)
-                next_page_no += len(table_pages)
-            else:
+            if table_name not in changed_tables and table_name in schema_entries_by_name:
                 root_page = schema_entries_by_name[table_name].root_page
+                updated_entries.append(self._table_to_schema_entry(table, root_page))
+                continue
+
+            if table_name in schema_entries_by_name:
+                old_root_page = schema_entries_by_name[table_name].root_page
+                old_page_numbers = self._collect_leaf_page_numbers(old_root_page)
+            else:
+                old_root_page = 0
+                old_page_numbers = []
+
+            pages_cells = self._split_table_into_page_cells(table)
+            required_page_count = len(pages_cells)
+
+            if old_page_numbers:
+                reused_page_numbers = old_page_numbers[:required_page_count]
+                missing_page_count = max(0, required_page_count - len(reused_page_numbers))
+                new_page_numbers = [next_page_no + index for index in range(missing_page_count)]
+                next_page_no += missing_page_count
+                assigned_page_numbers = reused_page_numbers + new_page_numbers
+                root_page = old_root_page
+            else:
+                assigned_page_numbers = [next_page_no + index for index in range(required_page_count)]
+                next_page_no += required_page_count
+                root_page = assigned_page_numbers[0]
+
+            built_pages = self._build_leaf_pages_for_numbers(pages_cells, assigned_page_numbers)
+            for page_number, page_bytes in zip(assigned_page_numbers, built_pages):
+                page_writes.append((page_number, page_bytes))
+
+            for page_number in old_page_numbers[:len(assigned_page_numbers)]:
+                if page_number not in journal_pages:
+                    journal_pages.append(page_number)
 
             updated_entries.append(self._table_to_schema_entry(table, root_page))
 
         schema_page = build_schema_page(updated_entries)
         new_header = FileHeader(
-            page_count=current_header.page_count + len(appended_pages),
+            page_count=max(current_header.page_count, next_page_no),
             free_list_head=current_header.free_list_head,
             schema_root_page=current_header.schema_root_page,
             generation=current_header.generation + 1,
@@ -215,15 +244,15 @@ class PytuckyBackend(StorageBackend):
         )
 
         self._write_journal(
-            page_numbers=[0, current_header.schema_root_page],
+            page_numbers=journal_pages,
             original_page_count=current_header.page_count,
         )
 
         try:
             with open(self.file_path, 'r+b') as handle:
-                handle.seek(Pager.page_offset(current_header.page_count))
-                for page in appended_pages:
-                    handle.write(page)
+                for page_number, page_bytes in sorted(page_writes, key=lambda item: item[0]):
+                    handle.seek(Pager.page_offset(page_number))
+                    handle.write(page_bytes)
 
                 handle.seek(Pager.page_offset(current_header.schema_root_page))
                 handle.write(schema_page)
@@ -317,6 +346,25 @@ class PytuckyBackend(StorageBackend):
 
     def _serialize_table_pages(self, table: 'Table', start_page_no: int) -> Tuple[int, List[bytes]]:
         """将单表数据序列化为一个或多个叶页。"""
+        pages_cells = self._split_table_into_page_cells(table)
+        page_numbers = [start_page_no + index for index in range(len(pages_cells))]
+        return start_page_no, self._build_leaf_pages_for_numbers(pages_cells, page_numbers)
+
+    def _collect_leaf_page_numbers(self, root_page: int) -> List[int]:
+        """收集叶页链上的页号。"""
+        page_numbers: List[int] = []
+        page_no = root_page
+        while page_no != 0:
+            page_data = self.pager.read_page(page_no)
+            header = PageHeader.unpack(page_data)
+            if header.page_type != PageType.LEAF:
+                raise SerializationError(f'PTK6 page {page_no} is not a leaf page')
+            page_numbers.append(page_no)
+            page_no = header.right_pointer
+        return page_numbers
+
+    def _split_table_into_page_cells(self, table: 'Table') -> List[List[bytes]]:
+        """将表记录按页容量拆分为 cell 分组。"""
         records: List[Tuple[Any, Dict[str, Any]]]
         try:
             records = sorted(table.scan(), key=lambda item: item[0])
@@ -341,14 +389,22 @@ class PytuckyBackend(StorageBackend):
         if current_page_cells or not pages_cells:
             pages_cells.append(current_page_cells)
 
-        root_page = start_page_no
-        page_numbers = [start_page_no + index for index in range(len(pages_cells))]
+        return pages_cells
+
+    def _build_leaf_pages_for_numbers(
+        self,
+        pages_cells: List[List[bytes]],
+        page_numbers: List[int],
+    ) -> List[bytes]:
+        """按给定页号顺序构建叶页链。"""
+        if len(pages_cells) != len(page_numbers):
+            raise SerializationError('PTK6 page cell groups and page numbers length mismatch')
+
         pages: List[bytes] = []
         for index, cells in enumerate(pages_cells):
             right_pointer = page_numbers[index + 1] if index + 1 < len(page_numbers) else 0
             pages.append(build_slotted_page(PageType.LEAF, cells, right_pointer=right_pointer))
-
-        return root_page, pages
+        return pages
 
     def _collect_pk_offsets(self, root_page: int) -> Dict[Any, int]:
         """扫描叶页链，建立主键到 cell 偏移的映射。"""

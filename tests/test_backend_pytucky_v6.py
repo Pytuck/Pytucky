@@ -134,13 +134,24 @@ def test_pytucky_incremental_save_preserves_unchanged_tables(tmp_path: Path) -> 
     storage.close()
 
     original_size = db_path.stat().st_size
+    backend_before = PytuckyBackend(db_path, BinaryBackendOptions(lazy_load=True))
+    schema_before = {
+        entry.name: entry for entry in backend_before._read_schema_entries()
+    }
 
     reopened = Storage(file_path=db_path, engine='pytucky')
     reopened.insert('users', {'id': 2, 'name': 'Bob'})
     reopened.flush()
     reopened.close()
 
-    assert db_path.stat().st_size > original_size
+    backend_after = PytuckyBackend(db_path, BinaryBackendOptions(lazy_load=True))
+    schema_after = {
+        entry.name: entry for entry in backend_after._read_schema_entries()
+    }
+
+    assert db_path.stat().st_size == original_size
+    assert schema_after['users'].root_page == schema_before['users'].root_page
+    assert schema_after['items'].root_page == schema_before['items'].root_page
 
     verified = Storage(file_path=db_path, engine='pytucky')
     assert verified.count_rows('users') == 2
