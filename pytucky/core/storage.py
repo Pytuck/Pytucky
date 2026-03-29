@@ -1016,6 +1016,8 @@ class Storage:
         else:
             self.file_path = None
         self.in_memory: bool = in_memory or (file_path is None)
+        if self.file_path is not None and engine == 'pytuck' and self.file_path.suffix.lower() == '.pytucky':
+            engine = 'pytucky'
         self.engine_name = engine
         self.auto_flush = auto_flush
         self.tables: Dict[str, Table] = {}

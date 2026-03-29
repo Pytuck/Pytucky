@@ -153,7 +153,8 @@ def get_default_backend_options(engine: str) -> BackendOptions:
         'duckdb': DuckdbBackendOptions(),
         'excel': ExcelBackendOptions(),
         'xml': XmlBackendOptions(),
-        'pytuck': BinaryBackendOptions()
+        'pytuck': BinaryBackendOptions(),
+        'pytucky': BinaryBackendOptions()
     }
     return defaults.get(engine, BinaryBackendOptions())
 

@@ -92,6 +92,7 @@ from .common.exceptions import (
     PytuckIndexError,
 )
 from .common.options import SyncOptions, SyncResult
+from .backends.migrate_p5_to_p6 import migrate_pytuck_to_pytucky, migrate_p5_to_p6
 
 __version__ = '1.0.0'
 __all__ = [
@@ -128,6 +129,10 @@ __all__ = [
     # Schema 同步
     'SyncOptions',        # 同步选项
     'SyncResult',         # 同步结果
+
+    # 迁移工具
+    'migrate_pytuck_to_pytucky',  # PTK5 -> PTK6 显式迁移
+    'migrate_p5_to_p6',           # 迁移别名
 
     # 查询结果
     'Result',        # 查询结果包装器
