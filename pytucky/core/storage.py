@@ -1057,6 +1057,14 @@ class Storage:
                 self.tables = self.backend.load()
                 self._dirty = False
 
+                # 在加载后确保基于列定义重建索引（后端可能没有序列化运行时索引结构）
+                for table in self.tables.values():
+                    # 如果表对象已经包含 indexes，清理并重建以防格式不一致
+                    table.indexes = {}
+                    for col in table.columns.values():
+                        if col.index:
+                            table.build_index(col.name)  # type: ignore[arg-type]
+
                 # 对于 pytuck 引擎，初始化 WAL 模式并回放未提交的日志
                 if engine == 'pytuck':
                     self._init_wal_mode()
