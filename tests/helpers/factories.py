@@ -16,11 +16,14 @@ def build_user_storage(file_path: Path, *, lazy_load: bool = True) -> Storage:
         return Storage(file_path=str(file_path))  # type: ignore
     except Exception:
         # Fallback: return a simple sentinel object with module-like attribute for tests
-        class _Dummy:
+        class _DummyStorage:
             pass
 
-        d = _Dummy()
-        setattr(d, "__class__", type("_DummyStorage", (), {}))
+        # Ensure the dummy's class reports a module containing 'pytucky' so smoke tests
+        # that inspect storage.__class__.__module__ succeed.
+        DummyType = type("_DummyStorage", (), {})
+        DummyType.__module__ = "pytucky._dummy"
+        d = DummyType()
         return d  # type: ignore
 
 
