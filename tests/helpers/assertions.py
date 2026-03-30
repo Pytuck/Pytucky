@@ -1,7 +1,6 @@
-from typing import Iterable, Any, Sequence
+from typing import Any, Dict, Iterable, Tuple
 
 
-def assert_scan_matches(rows: Iterable[dict], expected_pks: Sequence[Any]) -> None:
-    # Expect rows to be iterable of dict-like objects with 'id' primary key
-    pks = [r.get("id") for r in rows]
-    assert list(pks) == list(expected_pks), f"Primary keys do not match: {pks} != {expected_pks}"
+def assert_scan_matches(rows: Iterable[Tuple[Any, Dict[str, Any]]], expected_pks: Iterable[Any]) -> None:
+    actual_pks = [pk for pk, _ in rows]
+    assert actual_pks == list(expected_pks)

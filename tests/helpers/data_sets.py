@@ -1,8 +1,8 @@
-from typing import List, Dict, Any
+from typing import Dict, List
 
 
 def basic_user_rows() -> List[Dict[str, object]]:
     return [
-        {"id": 1, "name": "alice", "age": 30},
-        {"id": 2, "name": "bob", "age": 25},
+        {"id": 1, "name": "Alice", "age": 20},
+        {"id": 2, "name": "Bob", "age": None},
     ]

@@ -1,13 +1,14 @@
-from typing import List, Dict, Any
-import itertools
+from typing import Any, Iterable, List
+from itertools import product
 
 
 def lazy_modes() -> List[bool]:
     return [False, True]
 
 
-def dict_matrix(**dimensions: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
+def dict_matrix(**dimensions: Iterable[Any]) -> List[dict]:
     """Create a list of dictionaries representing the cartesian product of dimensions.
+
     Example: dict_matrix(a=[1,2], b=[True,False]) ->
       [{'a':1,'b':True}, {'a':1,'b':False}, {'a':2,'b':True}, {'a':2,'b':False}]
     """
@@ -15,9 +16,9 @@ def dict_matrix(**dimensions: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
     if not keys:
         return [{}]
 
-    values_lists = [dimensions[k] for k in keys]
-    result: List[Dict[str, Any]] = []
-    for combo in itertools.product(*values_lists):
-        d: Dict[str, Any] = {k: v for k, v in zip(keys, combo)}
+    values_lists = [list(dimensions[k]) for k in keys]
+    result: List[dict] = []
+    for combo in product(*values_lists):
+        d = {k: v for k, v in zip(keys, combo)}
         result.append(d)
     return result
