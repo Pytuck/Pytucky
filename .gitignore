@@ -6,8 +6,13 @@ __pycache__/
 dist/
 build/
 *.pytuck
+*.pytucky
 *.db
 .mypy_cache/
 .pytest_cache/
 docs/superpowers/
 .worktrees/
+# benchmark outputs
+tests/benchmark/benchmark_output/
+.tmp_bench
+
