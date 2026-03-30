@@ -1,44 +1,26 @@
 from pathlib import Path
 from typing import Iterable, Dict, Any
-
-try:
-    from pytucky import Storage
-except Exception:  # pragma: no cover - fallback for environments where package not importable
-    Storage = object  # type: ignore
+from pytucky import Column, Storage
+from pytucky.common.options import BinaryBackendOptions
 
 
 def build_user_storage(file_path: Path, *, lazy_load: bool = True) -> Storage:
-    """Create a Storage instance pointed at file_path.
-
-    Minimal implementation: attempt to instantiate pytucky.Storage(file_path=...) if available.
-    """
-    try:
-        return Storage(file_path=str(file_path))  # type: ignore
-    except Exception:
-        # Fallback: return a simple sentinel object with module-like attribute for tests
-        class _DummyStorage:
-            pass
-
-        # Ensure the dummy's class reports a module containing 'pytucky' so smoke tests
-        # that inspect storage.__class__.__module__ succeed.
-        DummyType = type("_DummyStorage", (), {})
-        DummyType.__module__ = "pytucky._dummy"
-        d = DummyType()
-        return d  # type: ignore
+    storage = Storage(
+        file_path=file_path,
+        engine="pytucky",
+        backend_options=BinaryBackendOptions(lazy_load=lazy_load),
+    )
+    storage.create_table(
+        "users",
+        [
+            Column(int, name="id", primary_key=True),
+            Column(str, name="name"),
+            Column(int, name="age", nullable=True),
+        ],
+    )
+    return storage
 
 
 def insert_users(storage: Storage, rows: Iterable[Dict[str, Any]]) -> None:
-    """Insert rows into storage.
-
-    Minimal no-op implementation for tests that don't exercise persistence.
-    """
-    # Best-effort: if storage has an `insert` or `bulk_insert` method, try to call it.
-    try:
-        if hasattr(storage, "insert"):
-            for r in rows:
-                storage.insert(r)
-        elif hasattr(storage, "bulk_insert"):
-            storage.bulk_insert(list(rows))
-    except Exception:
-        # swallow; helpers aim to be non-failing for smoke tests
-        return
+    for row in rows:
+        storage.insert("users", dict(row))

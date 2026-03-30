@@ -1,8 +1,9 @@
 from typing import List, Dict, Any
+import itertools
 
 
 def lazy_modes() -> List[bool]:
-    return [True, False]
+    return [False, True]
 
 
 def dict_matrix(**dimensions: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
@@ -14,14 +15,9 @@ def dict_matrix(**dimensions: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
     if not keys:
         return [{}]
 
-    result: List[Dict[str, Any]] = [{}]
-    for k in keys:
-        vals = dimensions[k]
-        new: List[Dict[str, Any]] = []
-        for r in result:
-            for v in vals:
-                nr = dict(r)
-                nr[k] = v
-                new.append(nr)
-        result = new
+    values_lists = [dimensions[k] for k in keys]
+    result: List[Dict[str, Any]] = []
+    for combo in itertools.product(*values_lists):
+        d: Dict[str, Any] = {k: v for k, v in zip(keys, combo)}
+        result.append(d)
     return result
