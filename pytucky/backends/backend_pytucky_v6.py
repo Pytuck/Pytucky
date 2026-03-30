@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, TYPE_CHECKING
 
 from ..common.exceptions import SerializationError, UnsupportedOperationError
+from ..core.index import HashIndex, SortedIndex
 from .backend_binary import BinaryBackend
 from .base import StorageBackend
 from .pager import (
@@ -290,8 +291,8 @@ class PytuckyBackend(StorageBackend):
             table._data_file = self.file_path
 
             if self.supports_lazy_loading():
-                table._pk_offsets = self._collect_pk_offsets(entry.root_page)
                 table._lazy_loaded = True
+                self._restore_lazy_table_metadata(table, entry.root_page)
             else:
                 for pk, record in self._load_table_records(entry.root_page, table.columns):
                     record_with_pk = record.copy()
@@ -310,6 +311,35 @@ class PytuckyBackend(StorageBackend):
             if table._lazy_loaded:
                 table._ensure_all_loaded()
                 table.reset_dirty()
+
+    def _restore_lazy_table_metadata(self, table: 'Table', root_page: int) -> None:
+        """恢复懒加载表的主键偏移与运行时索引，不 materialize 到 table.data。"""
+        indexed_columns: List[str] = []
+        for col_name, column in table.columns.items():
+            if not column.index:
+                continue
+
+            index_type = 'hash' if column.index is True else column.index
+            if index_type == 'sorted':
+                table.indexes[col_name] = SortedIndex(col_name)
+            else:
+                table.indexes[col_name] = HashIndex(col_name)
+            indexed_columns.append(col_name)
+
+        if not indexed_columns:
+            table._pk_offsets = self._collect_pk_offsets(root_page)
+            return
+
+        pk_offsets: Dict[Any, int] = {}
+        for page_no, cell_offset, cell_payload in self._iter_leaf_cells(root_page):
+            pk, record = self._decode_record_cell(cell_payload, table.columns)
+            pk_offsets[pk] = Pager.page_offset(page_no) + cell_offset
+            for col_name in indexed_columns:
+                value = record.get(col_name)
+                if value is not None:
+                    table.indexes[col_name].insert(value, pk)
+
+        table._pk_offsets = pk_offsets
 
     def read_lazy_record(
         self,

@@ -23,8 +23,12 @@ def test_index_is_restored_after_reopen(tmp_path: Path) -> None:
 
     reopened = Storage(file_path=str(db_path))
     table = reopened.get_table("users")
+    assert getattr(table, "_lazy_loaded", True) is True
+    assert getattr(table, "data", {}) == {} or table.data is None
+
     idx = table.indexes.get("name")
     # index lookup may return list or set; normalize to set of ints
     found = set(idx.lookup("Alice")) if idx is not None else set()
     assert found == {1, 2}
+    assert getattr(table, "data", {}) == {} or table.data is None
     reopened.close()
