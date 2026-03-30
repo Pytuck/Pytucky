@@ -3,25 +3,68 @@ from typing import Type
 
 import pytest
 
-from pytucky import Column, Storage, declarative_base
-from tests.helpers.factories import build_user_storage
+from pytucky import Column, Session, Storage, declarative_base, insert, select
+from pytucky import PureBaseModel
 
 
 @pytest.mark.feature
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"id": 1, "name": "Alice", "age": 20},
-        {"id": 2, "name": "Bob", "age": None},
-    ],
-)
-def test_storage_insert_select_roundtrip(tmp_path: Path, payload: dict) -> None:
-    db = build_user_storage(tmp_path / "storage-basic.pytucky")
-    db.insert("users", payload)
-    db.flush()
-    db.close()
+def test_session_commit_persists_inserted_rows(tmp_path: Path) -> None:
+    db = Storage(file_path=tmp_path / "session-basic.pytucky")
+    Base: Type[PureBaseModel] = declarative_base(db)
 
-    reopened = Storage(file_path=tmp_path / "storage-basic.pytucky", engine="pytucky")
-    row = reopened.select("users", payload["id"])
-    assert row["name"] == payload["name"]
-    reopened.close()
+    class User(Base):
+        __tablename__ = "users"
+        id = Column(int, primary_key=True)
+        name = Column(str)
+
+    session = Session(db)
+    try:
+        session.execute(insert(User).values(name="Alice"))
+        session.commit()
+
+        rows = session.execute(select(User)).all()
+        assert len(rows) == 1
+        assert rows[0].name == "Alice"
+    finally:
+        # 确保在任何情况下都关闭会话和存储
+        try:
+            session.close()
+        finally:
+            db.close()
+
+
+@pytest.mark.feature
+def test_transaction_rollback_restores_original_data(tmp_path: Path) -> None:
+    db = Storage(file_path=tmp_path / "rollback.pytucky")
+    Base: Type[PureBaseModel] = declarative_base(db)
+
+    class User(Base):
+        __tablename__ = "users"
+        id = Column(int, primary_key=True)
+        name = Column(str)
+        balance = Column(int)
+
+    session = Session(db)
+    try:
+        session.execute(insert(User).values(name="Alice", balance=100))
+        session.commit()
+
+        # 在事务内做一次真实写入，然后抛出异常以触发回滚
+        with pytest.raises(ValueError):
+            with session.begin():
+                session.execute(insert(User).values(name="Bob", balance=50))
+                # 确保写入发生（可在事务内查询到）
+                rows_in_tx = session.execute(select(User)).all()
+                assert any(r.name == "Bob" for r in rows_in_tx)
+                raise ValueError("abort")
+
+        # 事务结束后，回滚应恢复为只有 Alice
+        rows = session.execute(select(User)).all()
+        names = [r.name for r in rows]
+        assert "Alice" in names
+        assert "Bob" not in names
+    finally:
+        try:
+            session.close()
+        finally:
+            db.close()

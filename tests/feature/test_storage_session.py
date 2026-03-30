@@ -3,45 +3,30 @@ from typing import Type
 
 import pytest
 
-from pytucky import Column, Session, Storage, declarative_base, insert, select
-from pytucky import PureBaseModel
+from pytucky import Column, Storage, declarative_base
+from tests.helpers.factories import build_user_storage
 
 
 @pytest.mark.feature
-def test_session_commit_persists_inserted_rows(tmp_path: Path) -> None:
-    db = Storage(file_path=tmp_path / "session-basic.pytucky", engine="pytucky")
-    Base: Type[PureBaseModel] = declarative_base(db)
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"id": 1, "name": "Alice", "age": 20},
+        {"id": 2, "name": "Bob", "age": None},
+    ],
+)
+def test_storage_insert_select_roundtrip(tmp_path: Path, payload: dict) -> None:
+    db = build_user_storage(tmp_path / "storage-basic.pytucky")
+    try:
+        db.insert("users", payload)
+        db.flush()
+    finally:
+        # build_user_storage 返回的 db 在这里关闭
+        db.close()
 
-    class User(Base):
-        __tablename__ = "users"
-        id = Column(int, primary_key=True)
-        name = Column(str)
-
-    session = Session(db)
-    session.execute(insert(User).values(name="Alice"))
-    session.commit()
-
-    rows = session.execute(select(User)).all()
-    assert len(rows) == 1
-    assert rows[0].name == "Alice"
-
-
-@pytest.mark.feature
-def test_transaction_rollback_restores_original_data(tmp_path: Path) -> None:
-    db = Storage(file_path=tmp_path / "rollback.pytucky", engine="pytucky")
-    Base: Type[PureBaseModel] = declarative_base(db)
-
-    class User(Base):
-        __tablename__ = "users"
-        id = Column(int, primary_key=True)
-        name = Column(str)
-        balance = Column(int)
-
-    session = Session(db)
-    session.execute(insert(User).values(name="Alice", balance=100))
-    session.commit()
-
-    with pytest.raises(ValueError):
-        with session.begin():
-            session.execute(select(User)).all()
-            raise ValueError("abort")
+    reopened = Storage(file_path=tmp_path / "storage-basic.pytucky")
+    try:
+        row = reopened.select("users", payload["id"])
+        assert row["name"] == payload["name"]
+    finally:
+        reopened.close()
