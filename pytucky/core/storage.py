@@ -2745,7 +2745,7 @@ class Storage:
                 for table in self.tables.values():
                     if table._lazy_loaded:
                         table._ensure_all_loaded()
-            # PTK6 仅对发生变更的 lazy 表做 materialize，避免无关表被加载进内存。
+            # PTK7 仅对发生变更的 lazy 表做 materialize，避免无关表被加载进内存。
             elif self.engine_name == 'pytucky':
                 for table_name in changed_tables:
                     table = self.tables[table_name]
