@@ -206,6 +206,20 @@ class Select(Statement[T]):
         table_name = self.model_class.__tablename__
         assert table_name is not None, f"Model {self.model_class.__name__} must have __tablename__ defined"
 
+        # 快速路径：如果是单一主键等值查询，直接下推到 storage.select
+        pk_name = self.model_class.__primary_key__
+        from ..common.exceptions import RecordNotFoundError
+        if pk_name and len(self._where_clauses) == 1:
+            from .builder import BinaryExpression
+            expr = self._where_clauses[0]
+            if isinstance(expr, BinaryExpression):
+                if expr.column._attr_name == pk_name and expr.operator in ('=', '=='):
+                    try:
+                        rec = storage.select(table_name, expr.value)
+                        return [rec]
+                    except RecordNotFoundError:
+                        return []
+
         if len(self._order_by_fields) == 1:
             # 单列排序：下推给 Storage.query（可利用 SortedIndex 优化）
             field, desc = self._order_by_fields[0]

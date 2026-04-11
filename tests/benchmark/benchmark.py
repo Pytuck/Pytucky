@@ -17,7 +17,6 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from pytucky import Column, PureBaseModel, Session, Storage, declarative_base, insert, select
-from pytucky.common.options import BinaryBackendOptions
 
 DEFAULT_RECORD_COUNT = 100
 OUTPUT_DIR = Path(__file__).parent / "benchmark_output"
@@ -71,11 +70,11 @@ class PytuckyBenchmark:
             if path.exists() and path.is_file():
                 path.unlink()
 
-    def _lazy_storage(self) -> Storage:
-        return Storage(
-            file_path=self.file_path,
-            backend_options=BinaryBackendOptions(lazy_load=True),
-        )
+    def bench_reopen(self) -> float:
+        with Timer() as timer:
+            db = Storage(file_path=self.file_path)
+        db.close()
+        return timer.elapsed
 
     def bench_insert(self, session: Session, model_class: Type[PureBaseModel], count: int) -> float:
         with Timer() as timer:
@@ -96,11 +95,16 @@ class PytuckyBenchmark:
         db.close()
         return timer.elapsed
 
-    def bench_lazy_load(self) -> float:
-        with Timer() as timer:
-            db = self._lazy_storage()
-        db.close()
-        return timer.elapsed
+    def bench_reopen_first_query(self, count: int) -> float:
+        sample_id = min(count, max(1, (count + 1) // 2))
+        db = Storage(file_path=self.file_path)
+        try:
+            with Timer() as timer:
+                row = db.select(TABLE_NAME, sample_id)
+                _ = row.get("name")
+            return timer.elapsed
+        finally:
+            db.close()
 
     def bench_query_pk(
         self,
@@ -130,29 +134,6 @@ class PytuckyBenchmark:
                 _ = result.first()
         return timer.elapsed
 
-    def bench_lazy_query_first(self, count: int) -> float:
-        sample_id = min(count, max(1, (count + 1) // 2))
-        db = self._lazy_storage()
-        try:
-            with Timer() as timer:
-                row = db.select(TABLE_NAME, sample_id)
-                _ = row.get("name")
-            return timer.elapsed
-        finally:
-            db.close()
-
-    def bench_lazy_query_batch(self, count: int) -> float:
-        lookups = min(10, count)
-        db = self._lazy_storage()
-        try:
-            with Timer() as timer:
-                for index in range(lookups):
-                    row = db.select(TABLE_NAME, index + 1)
-                    _ = row.get("name")
-            return timer.elapsed
-        finally:
-            db.close()
-
     def run(self, count: int) -> Dict[str, Any]:
         results: Dict[str, Any] = {
             "engine": "pytucky",
@@ -179,10 +160,8 @@ class PytuckyBenchmark:
 
         try:
             results["load"] = self.bench_load()
-            results["lazy_load"] = self.bench_lazy_load()
-            results["lazy_query_first"] = self.bench_lazy_query_first(count)
-            if self.extended:
-                results["lazy_query_batch"] = self.bench_lazy_query_batch(count)
+            results["reopen"] = self.bench_reopen()
+            results["reopen_first_query"] = self.bench_reopen_first_query(count)
             results["file_size"] = self.file_path.stat().st_size if self.file_path.exists() else 0
             results["success"] = True
         except Exception as exc:
@@ -203,7 +182,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--extended",
         action="store_true",
-        help="run indexed and repeated lazy-query benchmarks",
+        help="run indexed-query and reopen metrics",
     )
     parser.add_argument(
         "--keep",

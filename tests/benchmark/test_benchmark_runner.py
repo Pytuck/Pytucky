@@ -21,13 +21,16 @@ def test_benchmark_schema(tmp_path: Path) -> None:
         "save",
         "query_pk",
         "load",
-        "lazy_load",
-        "lazy_query_first",
+        "reopen",
+        "reopen_first_query",
         "file_size",
         "query_indexed",
-        "lazy_query_batch",
     ):
         assert key in result
+
+    assert "lazy_load" not in result
+    assert "lazy_query_first" not in result
+    assert "lazy_query_batch" not in result
 
 
 @pytest.mark.benchmark

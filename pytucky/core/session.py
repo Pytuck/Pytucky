@@ -423,12 +423,8 @@ class Session:
         assert table_name is not None, f"Model {model_class.__name__} must have __tablename__ defined"
 
         try:
-            # 原生 SQL 模式：直接从数据库查询
-            if self.storage._native_sql_mode:
-                record = self.storage.select(table_name, pk)
-            else:
-                # 内存模式：从 Table.data 获取
-                record = self.storage.get_table(table_name).get(pk)
+            # 优化：直接使用 storage.select()，使得高层在需要时可以下推到后端（包括 PTK7 快速路径）
+            record = self.storage.select(table_name, pk)
 
             # 将 Column.name 转换为属性名
             attr_data = {}

@@ -57,3 +57,27 @@ def test_changed_lazy_table_flush_only_materializes_modified_table(tmp_path: Pat
     reopened2 = Storage(file_path=str(db_path))
     assert reopened2.select("users", 2)["name"] == "Bob"
     reopened2.close()
+
+
+@pytest.mark.feature
+def test_read_lazy_record_rebuilds_missing_offset_mapping(tmp_path: Path) -> None:
+    db_path = tmp_path / "lazy-offset-rebuild.pytucky"
+    storage = build_user_storage(db_path)
+    storage.insert("users", {"id": 1, "name": "Alice", "age": 20})
+    storage.flush()
+    storage.close()
+
+    reopened = Storage(file_path=str(db_path))
+    try:
+        table = reopened.get_table("users")
+        backend = reopened.backend
+        assert backend is not None
+        offset = table._pk_offsets[1]
+        backend._offset_map.pop(offset, None)
+
+        record = backend.read_lazy_record(db_path, offset, table.columns, 1)
+
+        assert record["name"] == "Alice"
+        assert backend._offset_map[offset] == ("users", 1)
+    finally:
+        reopened.close()
