@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ..backends.store_v7 import StoreV7, TableState
+from ..backends.store_v7 import StoreV7, TableState, TableOverlay
 from ..core.storage import Table
 from ..core.orm import Column
 from ..common.options import BackendOptions, BinaryBackendOptions
@@ -263,12 +263,37 @@ class PytuckyV7Backend(StorageBackend):
 
     def save(self, tables: Dict[str, Table], *, changed_tables: Optional[set] = None) -> None:
         # Convert high-level tables into StoreV7 internal states and flush via store.flush.
-        # Rebuild directly from table scan results to avoid per-row StoreV7.insert overhead.
-        del changed_tables
+        # Rebuild directly from table scan results for changed tables to avoid per-row StoreV7.insert overhead.
+        # For unchanged tables, reuse existing StoreV7.TableState to avoid materializing lazy tables.
+        changed_tables = set(changed_tables or set())
+        # capture previous on-disk states to allow reusing unchanged tables without materializing
+        prev_states: Dict[str, TableState] = {k: v for k, v in getattr(self.store, '_tables', {}).items()}
+        # close current store to prepare writing new file
         self.store.close()
+        # create a fresh store object representing the new on-disk layout
         self.store = StoreV7(self.file_path, open_existing=False)
         rebuilt_tables: Dict[str, TableState] = {}
+
         for name, table in tables.items():
+            if name not in changed_tables and name in prev_states:
+                # build a NEW TableState copying scalar data from previous state but with a fresh overlay
+                prev = prev_states[name]
+                rebuilt = TableState(
+                    name=prev.name,
+                    columns=list(prev.columns),
+                    primary_key=prev.primary_key,
+                    next_id=table.next_id,
+                    record_count=prev.record_count,
+                    data_offset=prev.data_offset,
+                    data_size=prev.data_size,
+                    pk_index=dict(prev.pk_index),
+                    index_meta=dict(prev.index_meta),
+                    overlay=TableOverlay(),
+                )
+                rebuilt_tables[name] = rebuilt
+                continue
+
+            # build fresh state from high-level table (changed or absent prev state)
             cols = list(table.columns.values())
             state = TableState(
                 name=name,
@@ -282,6 +307,8 @@ class PytuckyV7Backend(StorageBackend):
             for pk, rec in table.scan():
                 state.overlay.inserted[pk] = dict(rec)
             rebuilt_tables[name] = state
+
+        # assign rebuilt tables and flush
         self.store._tables = rebuilt_tables
         self.store.flush()
         # rebuild offset lookup so future lazy reads use up-to-date offsets
