@@ -60,6 +60,38 @@ def test_changed_lazy_table_flush_only_materializes_modified_table(tmp_path: Pat
 
 
 @pytest.mark.feature
+def test_changed_lazy_table_update_fastpath_does_not_materialize(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = tmp_path / "lazy-flush-update.pytucky"
+    storage = build_user_storage(db_path)
+    storage.insert("users", {"id": 1, "name": "Alice", "age": 20})
+    storage.flush()
+    storage.close()
+
+    reopened = Storage(file_path=str(db_path))
+    try:
+        table = reopened.get_table("users")
+        assert table._lazy_loaded is True
+
+        # prevent full materialization: if called, fail the test
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("Table was materialized during fast-path flush")
+
+        monkeypatch.setattr(table, "_ensure_all_loaded", fail_if_called)
+
+        # perform update on existing (on-disk) pk
+        reopened.update("users", 1, {"age": 21})
+        # flush should use fast-path and not call _ensure_all_loaded
+        reopened.flush()
+    finally:
+        reopened.close()
+
+    # verify persisted
+    reopened2 = Storage(file_path=str(db_path))
+    assert reopened2.select("users", 1)["age"] == 21
+    reopened2.close()
+
+
+@pytest.mark.feature
 def test_read_lazy_record_rebuilds_missing_offset_mapping(tmp_path: Path) -> None:
     db_path = tmp_path / "lazy-offset-rebuild.pytucky"
     storage = build_user_storage(db_path)
@@ -134,3 +166,54 @@ def test_flush_only_materializes_changed_table_among_many(tmp_path: Path, monkey
         assert items.data == {} or items.data is None
     finally:
         reopened.close()
+
+
+@pytest.mark.feature
+def test_mixed_ops_on_reopened_lazy_table_flush_does_not_materialize(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """在同一张 lazy 表里混合 insert/update/delete，flush 不应触发 _ensure_all_loaded。
+
+    场景：创建 users 表，插入 id=1 Alice age=20，id=2 Bob age=30，flush，close。
+    reopen，patch table._ensure_all_loaded 为抛 AssertionError。
+    update id=1 -> age=21；delete id=2；insert id=3 Carol age=40；flush。
+    reopen 验证：id=1 age==21；select id=2 抛 RecordNotFoundError；id=3 name==Carol
+    """
+    db_path = tmp_path / "lazy-mixed.pytucky"
+    # create initial storage and data
+    s = build_user_storage(db_path)
+    s.insert("users", {"id": 1, "name": "Alice", "age": 20})
+    s.insert("users", {"id": 2, "name": "Bob", "age": 30})
+    s.flush()
+    s.close()
+
+    reopened = Storage(file_path=str(db_path))
+    try:
+        table = reopened.get_table("users")
+        assert table._lazy_loaded is True
+
+        # prevent full materialization: if called, fail the test
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("Table was materialized during mixed-ops flush")
+
+        monkeypatch.setattr(table, "_ensure_all_loaded", fail_if_called)
+
+        # perform mixed operations
+        reopened.update("users", 1, {"age": 21})
+        reopened.delete("users", 2)
+        reopened.insert("users", {"id": 3, "name": "Carol", "age": 40})
+
+        # flush should persist changes without materializing the full table
+        reopened.flush()
+    finally:
+        reopened.close()
+
+    # verify persisted results
+    reopened2 = Storage(file_path=str(db_path))
+    try:
+        assert reopened2.select("users", 1)["age"] == 21
+        from pytucky.common.exceptions import RecordNotFoundError
+
+        with pytest.raises(RecordNotFoundError):
+            reopened2.select("users", 2)
+        assert reopened2.select("users", 3)["name"] == "Carol"
+    finally:
+        reopened2.close()

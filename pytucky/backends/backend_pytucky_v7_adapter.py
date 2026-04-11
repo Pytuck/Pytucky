@@ -295,18 +295,80 @@ class PytuckyV7Backend(StorageBackend):
 
             # build fresh state from high-level table (changed or absent prev state)
             cols = list(table.columns.values())
-            state = TableState(
-                name=name,
-                columns=cols,
-                primary_key=table.primary_key,
-                next_id=table.next_id,
-                record_count=0,
-                data_offset=0,
-                data_size=0,
-            )
-            for pk, rec in table.scan():
-                state.overlay.inserted[pk] = dict(rec)
-            rebuilt_tables[name] = state
+            # Fast-path for changed lazy tables: if table is lazy-loaded and schema unchanged and
+            # we have a previous on-disk state, attempt to construct overlay from explicit dirty PK sets.
+            # However, for robustness we require that all inserted/updated dirty PKs have corresponding
+            # in-memory records present in table.data. If any are missing, fall back to the safe full scan
+            # path (do not attempt to recover via table.get or similar, since updated items may need old on-disk
+            # values).
+            if table._lazy_loaded and name in prev_states and not table._schema_dirty and getattr(table, 'inserted', None) is not None:
+                # quick pre-check: ensure inserted/updated PKs are present in table.data
+                inserted_set = set(getattr(table, 'inserted', set()))
+                updated_set = set(getattr(table, 'updated', set()))
+                missing_pk = False
+                for pk in inserted_set | updated_set:
+                    if pk not in table.data:
+                        missing_pk = True
+                        break
+                if missing_pk:
+                    # fallback to full scan path
+                    state = TableState(
+                        name=name,
+                        columns=cols,
+                        primary_key=table.primary_key,
+                        next_id=table.next_id,
+                        record_count=0,
+                        data_offset=0,
+                        data_size=0,
+                    )
+                    for pk, rec in table.scan():
+                        state.overlay.inserted[pk] = dict(rec)
+                    rebuilt_tables[name] = state
+                else:
+                    prev = prev_states.get(name)
+                    state = TableState(
+                        name=prev.name,
+                        columns=list(prev.columns),
+                        primary_key=prev.primary_key,
+                        next_id=table.next_id,
+                        record_count=prev.record_count,
+                        data_offset=prev.data_offset,
+                        data_size=prev.data_size,
+                        pk_index=dict(prev.pk_index),
+                        index_meta=dict(prev.index_meta),
+                        overlay=TableOverlay(),
+                    )
+                    # Apply explicit dirty PK sets to overlay without materializing entire table
+                    # Inserted: must exist in table.data
+                    for pk in inserted_set:
+                        rec = table.data.get(pk)
+                        if rec is not None:
+                            state.overlay.inserted[pk] = dict(rec)
+                    # Updated: records that exist on disk and were updated in memory
+                    for pk in updated_set:
+                        rec = table.data.get(pk)
+                        if rec is not None:
+                            state.overlay.updated[pk] = dict(rec)
+                    # Deleted: mark for deletion in overlay
+                    for pk in getattr(table, 'deleted', set()):
+                        state.overlay.deleted.add(pk)
+                        # ensure removed from pk_index to avoid writing old record
+                        if pk in state.pk_index:
+                            del state.pk_index[pk]
+                    rebuilt_tables[name] = state
+            else:
+                state = TableState(
+                    name=name,
+                    columns=cols,
+                    primary_key=table.primary_key,
+                    next_id=table.next_id,
+                    record_count=0,
+                    data_offset=0,
+                    data_size=0,
+                )
+                for pk, rec in table.scan():
+                    state.overlay.inserted[pk] = dict(rec)
+                rebuilt_tables[name] = state
 
         # assign rebuilt tables and flush
         self.store._tables = rebuilt_tables

@@ -66,7 +66,10 @@ class TransactionSnapshot:
                 '_data_file': data_file,
                 '_backend': backend_ref,
                 '_data_dirty': table._data_dirty,
-                '_schema_dirty': table._schema_dirty
+                '_schema_dirty': table._schema_dirty,
+                'inserted': copy.deepcopy(getattr(table, 'inserted', set())),
+                'updated': copy.deepcopy(getattr(table, 'updated', set())),
+                'deleted': copy.deepcopy(getattr(table, 'deleted', set())),
             }
 
     def restore(self, tables: Dict[str, 'Table']) -> None:
@@ -91,6 +94,10 @@ class TransactionSnapshot:
                 table._backend = snapshot.get('_backend')
                 table._data_dirty = bool(snapshot.get('_data_dirty', False))
                 table._schema_dirty = bool(snapshot.get('_schema_dirty', False))
+                # 恢复显式的 dirty PK 集合
+                table.inserted = set(snapshot.get('inserted', set()))
+                table.updated = set(snapshot.get('updated', set()))
+                table.deleted = set(snapshot.get('deleted', set()))
 
 
 class Table:
@@ -133,6 +140,15 @@ class Table:
         self._backend: Optional[Any] = None  # Binary 后端引用（用于读取记录）
         self._lazy_loaded: bool = False  # 是否为懒加载模式
 
+        # 在 runtime 维护显式的 dirty PK 集合（用于 PTK7 lazy fast-path）
+        # semantics:
+        # - inserted: 新插入且未刷盘的 PK
+        # - updated: 在磁盘已有记录上做的更新（不包含 inserted PK）
+        # - deleted: 从磁盘或内存删除的 PK（对 inserted 则直接移除 inserted）
+        self.inserted: set = set()
+        self.updated: set = set()
+        self.deleted: set = set()
+
         # 自动为标记了index的列创建索引
         for col in columns:
             if col.index:
@@ -153,6 +169,10 @@ class Table:
         """重置脏标记（由 Storage.flush 在保存完成后调用）"""
         self._data_dirty = False
         self._schema_dirty = False
+        # 清空显式维护的 dirty PK 集合
+        self.inserted.clear()
+        self.updated.clear()
+        self.deleted.clear()
 
     def _normalize_pk(self, pk: Any) -> Any:
         """
@@ -238,6 +258,12 @@ class Table:
         if isinstance(pk, int) and pk >= self.next_id:
             self.next_id = pk + 1
 
+        # 维护 dirty PK 集合：新插入的 PK 归入 inserted
+        self.inserted.add(pk)
+        # 如果之前被标记为 deleted 或 updated，清理它们
+        self.deleted.discard(pk)
+        self.updated.discard(pk)
+
         self._data_dirty = True
         return pk
 
@@ -281,6 +307,14 @@ class Table:
 
         # 存储记录
         self.data[pk] = validated_record
+        # 维护 dirty PK 集合：如果是新插入保留 inserted，否则视为 updated
+        if pk in self.inserted:
+            # 已在 inserted 中，保持 inserted 不变
+            pass
+        else:
+            self.updated.add(pk)
+        # 删除可能的 deleted 标记
+        self.deleted.discard(pk)
         self._data_dirty = True
 
     def delete(self, pk: Any) -> None:
@@ -312,6 +346,12 @@ class Table:
         del self.data[pk]
         if self._pk_offsets is not None and pk in self._pk_offsets:
             del self._pk_offsets[pk]
+        # 维护 dirty PK 集合：如果是刚插入的，移除 inserted；否则标记为 deleted 并清除 updated
+        if pk in self.inserted:
+            self.inserted.discard(pk)
+        else:
+            self.deleted.add(pk)
+            self.updated.discard(pk)
         self._data_dirty = True
 
     def bulk_insert(self, records: List[Dict[str, Any]]) -> List[Any]:
@@ -397,6 +437,10 @@ class Table:
                 validated_value = column.validate(value)
                 validated_record[col_name] = validated_value
             self.data[pk] = validated_record
+            # 维护 dirty 集合：这些都是插入
+            self.inserted.add(pk)
+            self.deleted.discard(pk)
+            self.updated.discard(pk)
 
         # 第三阶段：批量更新索引
         for col_name, index in self.indexes.items():
@@ -462,6 +506,12 @@ class Table:
 
             # 存储记录
             self.data[pk] = validated_record
+            # 维护 dirty 集合：更新时若在 inserted 中则保持 inserted，否则加入 updated
+            if pk in self.inserted:
+                pass
+            else:
+                self.updated.add(pk)
+            self.deleted.discard(pk)
             count += 1
 
         if count > 0:
@@ -2739,17 +2789,27 @@ class Storage:
                 if table.is_dirty
             }
 
-            # PTK5 后端仍会执行全量 checkpoint，
-            # 因此 flush 前必须把所有 lazy 表 materialize，避免未改动表被写成空表。
-            if self.engine_name == 'pytuck':
+            # 处理懒加载表的 materialize 策略：
+            # - 旧 PTK5 引擎需要对所有 lazy 表进行全量 materialize
+            # - 支持 lazy-loading 的后端（如 V7 adapter）可以仅对 changed_tables materialize
+            backend_supports_lazy = self.backend is not None and hasattr(self.backend, 'supports_lazy_loading') and self.backend.supports_lazy_loading()
+            if not backend_supports_lazy and self.engine_name == 'pytuck':
+                # PTK5 fallback: materialize all lazy tables
                 for table in self.tables.values():
                     if table._lazy_loaded:
                         table._ensure_all_loaded()
-            # PTK7 仅对发生变更的 lazy 表做 materialize，避免无关表被加载进内存。
-            elif self.engine_name == 'pytucky':
+            else:
+                # Backends that support lazy loading (PTK7) only materialize changed tables
                 for table_name in changed_tables:
                     table = self.tables[table_name]
-                    if table._lazy_loaded:
+                    # If backend supports lazy fast-path (PTK7) and table is lazy and only data-changed,
+                    # we can avoid materializing and let backend adapter build overlay from explicit dirty PK sets.
+                    skip_materialize = (
+                        backend_supports_lazy
+                        and getattr(table, '_lazy_loaded', False)
+                        and not getattr(table, '_schema_dirty', False)
+                    )
+                    if not skip_materialize and table._lazy_loaded:
                         table._ensure_all_loaded()
 
             self.backend.save(self.tables, changed_tables=changed_tables)
