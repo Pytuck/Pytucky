@@ -116,7 +116,7 @@ PTK7 的默认打开路径只读取：
 
 - `Session.get()` 直接走 `storage.select()`
 - `select(Model).filter_by(id=...)` 直接下推主键读取
-- 底层 `StoreV7` 用 `pk -> (offset, length)` 直接定位记录
+- 底层 `Store` 用 `pk -> (offset, length)` 直接定位记录
 
 这也是 `query_pk` 能从此前秒级回落到毫秒级的关键原因。
 
@@ -124,8 +124,8 @@ PTK7 的默认打开路径只读取：
 
 当前 `save/flush` 主路径主要做了四件事：
 
-- 高层 `Storage.flush()` 不再通过 row-by-row `StoreV7.insert()` 重建整库
-- `StoreV7.flush()` 单表只物化一次 live records，并复用它生成数据区和索引区
+- 高层 `Storage.flush()` 不再通过 row-by-row `Store.insert()` 重建整库
+- `Store.flush()` 单表只物化一次 live records，并复用它生成数据区和索引区
 - 写盘后直接刷新内存状态，不再立刻重新 `open()` 整个文件回读
 - 对 changed lazy table，不再在高层无条件 `_ensure_all_loaded()`；当条件满足时，直接由 backend 基于显式 dirty PK 集合构造 overlay，再参与单文件重写
 

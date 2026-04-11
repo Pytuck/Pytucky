@@ -6,12 +6,12 @@ import pytest
 
 from pytucky import Column
 from pytucky.common.exceptions import RecordNotFoundError
-from pytucky.backends.store_v7 import StoreV7
+from pytucky.backends.store import Store
 
 
 
-def build_store(path: Path) -> StoreV7:
-    store = StoreV7(path)
+def build_store(path: Path) -> Store:
+    store = Store(path)
     store.create_table(
         "users",
         [
@@ -30,7 +30,7 @@ def test_open_loads_only_directory_metadata(tmp_path: Path) -> None:
     store.insert("users", {"name": "Alice", "age": 18})
     store.flush()
 
-    reopened = StoreV7(file_path)
+    reopened = Store(file_path)
     state = reopened.table_state("users")
     assert state.overlay.inserted == {}
     assert state.overlay.updated == {}
@@ -53,7 +53,7 @@ def test_repeated_select_reuses_single_reader_handle(
     store.insert("users", {"name": "Bob", "age": 20})
     store.flush()
 
-    reopened = StoreV7(file_path)
+    reopened = Store(file_path)
     calls = {"count": 0}
     path_type = type(file_path)
     original_open = path_type.open
@@ -89,7 +89,7 @@ def test_update_overrides_disk_row_before_flush(tmp_path: Path) -> None:
     store.insert("users", {"name": "Alice", "age": 18})
     store.flush()
 
-    reopened = StoreV7(file_path)
+    reopened = Store(file_path)
     reopened.update("users", 1, {"name": "Bob", "age": 19})
 
     row = reopened.select("users", 1)
@@ -103,7 +103,7 @@ def test_delete_hides_disk_row_before_flush(tmp_path: Path) -> None:
     store.insert("users", {"name": "Alice", "age": 18})
     store.flush()
 
-    reopened = StoreV7(file_path)
+    reopened = Store(file_path)
     reopened.delete("users", 1)
 
     with pytest.raises(RecordNotFoundError):
@@ -123,7 +123,7 @@ def test_flush_reopen_multiple_records_and_next_id(tmp_path: Path) -> None:
     store.flush()
 
     # 重新打开并验证都能读取
-    reopened = StoreV7(file_path)
+    reopened = Store(file_path)
     row1 = reopened.select("users", 1)
     row2 = reopened.select("users", 2)
     assert row1["name"] == "Alice"
@@ -147,12 +147,12 @@ def test_update_and_delete_persist_across_flush(tmp_path: Path) -> None:
     store.insert("users", {"name": "Bob", "age": 20})
     store.flush()
 
-    reopened = StoreV7(file_path)
+    reopened = Store(file_path)
     # update 并 flush
     reopened.update("users", 1, {"name": "AliceUpdated", "age": 19})
     reopened.flush()
 
-    reopened2 = StoreV7(file_path)
+    reopened2 = Store(file_path)
     row1 = reopened2.select("users", 1)
     assert row1["name"] == "AliceUpdated"
 
@@ -160,7 +160,7 @@ def test_update_and_delete_persist_across_flush(tmp_path: Path) -> None:
     reopened2.delete("users", 2)
     reopened2.flush()
 
-    reopened3 = StoreV7(file_path)
+    reopened3 = Store(file_path)
     with pytest.raises(RecordNotFoundError):
         reopened3.select("users", 2)
 

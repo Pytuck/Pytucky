@@ -178,7 +178,7 @@ class Select(Statement[T]):
             Select 对象（链式调用）
 
         Example:
-            from pytuck import prefetch
+            from pytucky import prefetch
 
             stmt = select(User).options(prefetch('orders'))
             result = session.execute(stmt)

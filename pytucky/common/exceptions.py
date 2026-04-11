@@ -1,18 +1,18 @@
 """
-Pytuck 异常定义
+Pytucky 异常定义
 
 提供统一的异常层次结构，便于用户捕获和处理错误。
-所有 Pytuck 异常都继承自 PytuckException 基类。
+所有 Pytucky 异常都继承自 PytuckyException 基类。
 """
 
 from typing import Any, Dict, Optional
 
 
-class PytuckException(Exception):
+class PytuckyException(Exception):
     """
-    Pytuck 基础异常类
+    Pytucky 基础异常类
 
-    所有 Pytuck 异常都继承自此类，提供统一的字段和方法。
+    所有 Pytucky 异常都继承自此类，提供统一的字段和方法。
 
     Attributes:
         message: 错误消息
@@ -64,7 +64,7 @@ class PytuckException(Exception):
 # 表/记录相关异常
 # =============================================================================
 
-class TableNotFoundError(PytuckException):
+class TableNotFoundError(PytuckyException):
     """表不存在异常"""
 
     def __init__(self, table_name: str):
@@ -74,7 +74,7 @@ class TableNotFoundError(PytuckException):
         )
 
 
-class RecordNotFoundError(PytuckException):
+class RecordNotFoundError(PytuckyException):
     """记录不存在异常"""
 
     def __init__(self, table_name: str, pk: Any):
@@ -85,7 +85,7 @@ class RecordNotFoundError(PytuckException):
         )
 
 
-class DuplicateKeyError(PytuckException):
+class DuplicateKeyError(PytuckyException):
     """主键重复异常"""
 
     def __init__(self, table_name: str, pk: Any):
@@ -96,7 +96,7 @@ class DuplicateKeyError(PytuckException):
         )
 
 
-class ColumnNotFoundError(PytuckException):
+class ColumnNotFoundError(PytuckyException):
     """列不存在异常"""
 
     def __init__(self, table_name: str, column_name: str):
@@ -111,7 +111,7 @@ class ColumnNotFoundError(PytuckException):
 # 验证相关异常
 # =============================================================================
 
-class ValidationError(PytuckException):
+class ValidationError(PytuckyException):
     """
     数据验证异常
 
@@ -177,7 +177,7 @@ class TypeConversionError(ValidationError):
 # 配置相关异常
 # =============================================================================
 
-class ConfigurationError(PytuckException):
+class ConfigurationError(PytuckyException):
     """
     配置异常
 
@@ -208,8 +208,8 @@ class SchemaError(ConfigurationError):
         table_name: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None
     ):
-        # 需要重新调用 PytuckException.__init__ 以设置 table_name
-        PytuckException.__init__(
+        # 需要重新调用 PytuckyException.__init__ 以设置 table_name
+        PytuckyException.__init__(
             self,
             message,
             table_name=table_name,
@@ -221,7 +221,7 @@ class SchemaError(ConfigurationError):
 # 查询相关异常
 # =============================================================================
 
-class QueryError(PytuckException):
+class QueryError(PytuckyException):
     """
     查询异常
 
@@ -248,7 +248,7 @@ class QueryError(PytuckException):
 # 事务相关异常
 # =============================================================================
 
-class TransactionError(PytuckException):
+class TransactionError(PytuckyException):
     """
     事务异常
 
@@ -268,7 +268,7 @@ class TransactionError(PytuckException):
 # 连接相关异常
 # =============================================================================
 
-class DatabaseConnectionError(PytuckException):
+class DatabaseConnectionError(PytuckyException):
     """
     数据库连接异常
 
@@ -288,7 +288,7 @@ class DatabaseConnectionError(PytuckException):
 # 序列化相关异常
 # =============================================================================
 
-class SerializationError(PytuckException):
+class SerializationError(PytuckyException):
     """
     序列化/反序列化异常
 
@@ -309,7 +309,7 @@ class SerializationError(PytuckException):
 # 加密相关异常
 # =============================================================================
 
-class EncryptionError(PytuckException):
+class EncryptionError(PytuckyException):
     """
     加密/解密异常
 
@@ -329,7 +329,7 @@ class EncryptionError(PytuckException):
 # 迁移相关异常
 # =============================================================================
 
-class MigrationError(PytuckException):
+class MigrationError(PytuckyException):
     """
     数据迁移异常
 
@@ -349,7 +349,7 @@ class MigrationError(PytuckException):
 # 索引相关异常
 # =============================================================================
 
-class PytuckIndexError(PytuckException):
+class PytuckyIndexError(PytuckyException):
     """
     索引异常
 
@@ -376,7 +376,7 @@ class PytuckIndexError(PytuckException):
 # 不支持的操作异常
 # =============================================================================
 
-class UnsupportedOperationError(PytuckException):
+class UnsupportedOperationError(PytuckyException):
     """
     不支持的操作异常
 
@@ -391,3 +391,8 @@ class UnsupportedOperationError(PytuckException):
         details: Optional[Dict[str, Any]] = None
     ):
         super().__init__(message, details=details)
+
+
+# 兼容旧名称，避免外部导入立即断裂
+PytuckException = PytuckyException
+PytuckIndexError = PytuckyIndexError

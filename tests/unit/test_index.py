@@ -1,7 +1,7 @@
 # 测试 PTK7 索引块原语（TDD）
 # 中文注释，英文标识符
 
-from pytucky.backends.index_v7 import (
+from pytucky.backends.index import (
     build_sorted_pairs,
     encode_sorted_pairs,
     decode_sorted_pairs,

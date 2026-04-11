@@ -899,7 +899,7 @@ class Session:
         ⚠️ 不推荐使用：请改用 session.execute(select(...)) 风格
 
         推荐写法：
-            from pytuck import select
+            from pytucky import select
             stmt = select(User).where(User.age >= 18)
             result = session.execute(stmt)
             users = result.all()
@@ -999,7 +999,7 @@ class Session:
 
         Example::
 
-            from pytuck import SyncOptions
+            from pytucky import SyncOptions
 
             result = session.sync_schema(User)
             if result.has_changes:
@@ -1029,7 +1029,7 @@ class Session:
             default_value: 为现有记录填充的默认值
 
         Example:
-            from pytuck import Column
+            from pytucky import Column
 
             # 通过模型类
             session.add_column(User, Column(int, nullable=True, name='age'))

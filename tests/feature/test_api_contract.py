@@ -28,9 +28,9 @@ def test_pure_model_roundtrip_after_reopen(tmp_path: Path) -> None:
         with open(db_path, 'rb') as f:
             magic = f.read(4)
         assert magic == b"PTK7"
-        # 进一步确保文件可以被底层 StoreV7 直接读取
-        from pytucky.backends.store_v7 import StoreV7
-        store = StoreV7(db_path)
+        # 进一步确保文件可以被底层 Store 直接读取
+        from pytucky.backends.store import Store
+        store = Store(db_path)
         assert store.select("users", 1)["name"] == "Alice"
     finally:
         session.close()
@@ -109,7 +109,7 @@ def test_storage_flush_bulk_loads_store_without_row_by_row_insert(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from pytucky.backends.store_v7 import StoreV7
+    from pytucky.backends.store import Store
 
     db_path = tmp_path / "bulk-flush.pytucky"
     db = Storage(file_path=db_path)
@@ -125,13 +125,13 @@ def test_storage_flush_bulk_loads_store_without_row_by_row_insert(
         db.insert("users", {"name": "Bob"})
 
         calls = {"count": 0}
-        original_insert = StoreV7.insert
+        original_insert = Store.insert
 
         def counting_insert(self, table_name, data):
             calls["count"] += 1
             return original_insert(self, table_name, data)
 
-        monkeypatch.setattr(StoreV7, "insert", counting_insert)
+        monkeypatch.setattr(Store, "insert", counting_insert)
 
         db.flush()
 

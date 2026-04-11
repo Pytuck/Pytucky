@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 
 from pytucky import Column
-from pytucky.backends.store_v7 import StoreV7
+from pytucky.backends.store import Store
 
 
-def build_store(path: Path) -> StoreV7:
-    store = StoreV7(path)
+def build_store(path: Path) -> Store:
+    store = Store(path)
     store.create_table(
         "users",
         [
@@ -42,7 +42,7 @@ def test_flush_reopen_index_allows_search(tmp_path: Path) -> None:
 
     store.flush()
 
-    reopened = StoreV7(file_path)
+    reopened = Store(file_path)
     res = reopened.search_index("users", "name", "Alice")
     assert set(res) == {1, 3}
     res_items = reopened.search_index("items", "tag", "blue")
@@ -57,7 +57,7 @@ def test_overlay_changes_visible_in_search_without_flush(tmp_path: Path) -> None
     store.insert("users", {"name": "Bob", "age": 20})
     store.flush()
 
-    reopened = StoreV7(file_path)
+    reopened = Store(file_path)
     # insert new row (not flushed) with indexed name
     new_pk = reopened.insert("users", {"name": "Alice", "age": 40})
     # update existing row to change name to Alice
@@ -81,7 +81,7 @@ def test_repeated_index_search_reuses_single_reader_handle(
     store.insert("users", {"name": "Bob", "age": 20})
     store.flush()
 
-    reopened = StoreV7(file_path)
+    reopened = Store(file_path)
     calls = {"count": 0}
     path_type = type(file_path)
     original_open = path_type.open

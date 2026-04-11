@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ..backends.store_v7 import StoreV7, TableState, TableOverlay
+from ..backends.store import Store, TableState, TableOverlay
 from ..core.storage import Table
 from ..core.orm import Column
 from ..common.options import BackendOptions, BinaryBackendOptions
@@ -9,8 +9,8 @@ from ..common.exceptions import SerializationError
 from .base import StorageBackend
 
 
-class PytuckyV7Backend(StorageBackend):
-    """Adapter backend that exposes StoreV7 to the high-level Storage API.
+class PytuckyBackend(StorageBackend):
+    """Adapter backend that exposes Store to the high-level Storage API.
 
     Minimal required methods implemented:
     - exists, load, save, delete, supports_lazy_loading, populate_tables_with_data, read_lazy_record
@@ -24,13 +24,13 @@ class PytuckyV7Backend(StorageBackend):
         if self.file_path.suffix.lower() in {'', '.pytuck'}:
             self.file_path = self.file_path.with_suffix('.pytucky')
         # initialize store and build offset lookup for fast lazy reads
-        self.store = StoreV7(self.file_path)
+        self.store = Store(self.file_path)
         # offset -> (table_name, pk)
         self._offset_map: Dict[int, tuple[str, Any]] = {}
         self._rebuild_offset_map()
 
     def _rebuild_offset_map(self) -> None:
-        """Rebuild internal offset lookup from the current StoreV7 state.
+        """Rebuild internal offset lookup from the current Store state.
 
         Maps each data offset to (table_name, pk) for O(1) table/record resolution by file offset.
         """
@@ -66,14 +66,14 @@ class PytuckyV7Backend(StorageBackend):
             path = Path(file_path).expanduser()
             if not path.exists() or not path.is_file() or path.stat().st_size < 64:
                 return False, None
-            # Do not raise on init; StoreV7 will attempt to open and validate header
-            StoreV7(path)
-            return True, {"engine": PytuckyV7Backend.ENGINE_NAME, "version": 7}
+            # Do not raise on init; Store will attempt to open and validate header
+            Store(path)
+            return True, {"engine": PytuckyBackend.ENGINE_NAME, "version": 7}
         except Exception:
             return False, None
 
     def load(self) -> Dict[str, Table]:
-        # Map StoreV7 table states to core.Table objects without materializing rows
+        # Map Store table states to core.Table objects without materializing rows
         tables: Dict[str, Table] = {}
         for name, state in self.store._tables.items():
             # build Column list expected by Table
@@ -84,15 +84,15 @@ class PytuckyV7Backend(StorageBackend):
             table._backend = self
             table._data_file = self.file_path
             table._lazy_loaded = True
-            # pk_index in StoreV7 maps pk -> (offset,length)
+            # pk_index in Store maps pk -> (offset,length)
             table._pk_offsets = {pk: off for pk, (off, length) in state.pk_index.items()}
 
             # restore indexes lazily: create proxy index objects that defer decoding to lookup/range operations
-            # proxies keep local overlay for in-memory insert/remove and call StoreV7 helpers on demand
+            # proxies keep local overlay for in-memory insert/remove and call Store helpers on demand
             from ..core.index import HashIndex, SortedIndex
 
             class HashIndexProxy(HashIndex):
-                def __init__(self, column_name: str, store: 'StoreV7', table_name: str, column_obj: Column):
+                def __init__(self, column_name: str, store: 'Store', table_name: str, column_obj: Column):
                     super().__init__(column_name)
                     self._store = store
                     self._table = table_name
@@ -134,7 +134,7 @@ class PytuckyV7Backend(StorageBackend):
                     return set(base)
 
             class SortedIndexProxy(SortedIndex):
-                def __init__(self, column_name: str, store: 'StoreV7', table_name: str, column_obj: Column):
+                def __init__(self, column_name: str, store: 'Store', table_name: str, column_obj: Column):
                     super().__init__(column_name)
                     self._store = store
                     self._table = table_name
@@ -172,14 +172,14 @@ class PytuckyV7Backend(StorageBackend):
                     return True
 
                 def range_query(self, min_val=None, max_val=None, include_min=True, include_max=True):
-                    # If store has index metadata, use index_v7.range_search_sorted_pairs reading the blob on demand
+                    # If store has index metadata, use index.range_search_sorted_pairs reading the blob on demand
                     state = self._store.table_state(self._table)
                     cim = state.index_meta.get(self.column_name)
                     result = set()
                     if cim is not None:
                         blob = self._store._read_bytes_at(cim.offset, cim.size)
-                        from ..backends import index_v7
-                        pks = index_v7.range_search_sorted_pairs(blob, self._column, min_val, max_val, include_min, include_max)
+                        from ..backends import index
+                        pks = index.range_search_sorted_pairs(blob, self._column, min_val, max_val, include_min, include_max)
                         result.update(pks)
                     else:
                         # fallback: scan pk list via store.select (may be slower)
@@ -262,16 +262,16 @@ class PytuckyV7Backend(StorageBackend):
             raise SerializationError(f'V7 read lazy record failed: {exc}') from exc
 
     def save(self, tables: Dict[str, Table], *, changed_tables: Optional[set] = None) -> None:
-        # Convert high-level tables into StoreV7 internal states and flush via store.flush.
-        # Rebuild directly from table scan results for changed tables to avoid per-row StoreV7.insert overhead.
-        # For unchanged tables, reuse existing StoreV7.TableState to avoid materializing lazy tables.
+        # Convert high-level tables into Store internal states and flush via store.flush.
+        # Rebuild directly from table scan results for changed tables to avoid per-row Store.insert overhead.
+        # For unchanged tables, reuse existing Store.TableState to avoid materializing lazy tables.
         changed_tables = set(changed_tables or set())
         # capture previous on-disk states to allow reusing unchanged tables without materializing
         prev_states: Dict[str, TableState] = {k: v for k, v in getattr(self.store, '_tables', {}).items()}
         # close current store to prepare writing new file
         self.store.close()
         # create a fresh store object representing the new on-disk layout
-        self.store = StoreV7(self.file_path, open_existing=False)
+        self.store = Store(self.file_path, open_existing=False)
         rebuilt_tables: Dict[str, TableState] = {}
 
         for name, table in tables.items():

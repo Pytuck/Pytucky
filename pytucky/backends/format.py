@@ -18,7 +18,7 @@ NULL_BITMAP_STRUCT = struct.Struct("<I")
 
 
 @dataclass(frozen=True)
-class FileHeaderV7:
+class FileHeader:
     magic: bytes = MAGIC_V7
     version: int = 7
     flags: int = 0
@@ -47,10 +47,10 @@ class FileHeaderV7:
         )
 
     @classmethod
-    def unpack(cls, data: bytes) -> "FileHeaderV7":
+    def unpack(cls, data: bytes) -> "FileHeader":
         if len(data) < HEADER_STRUCT.size:
             raise SerializationError(
-                f"Not enough data to decode FileHeaderV7 (need {HEADER_STRUCT.size}, got {len(data)})"
+                f"Not enough data to decode FileHeader (need {HEADER_STRUCT.size}, got {len(data)})"
             )
         unpacked = HEADER_STRUCT.unpack(data[: HEADER_STRUCT.size])
         header = cls(*unpacked)

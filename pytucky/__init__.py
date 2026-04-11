@@ -1,60 +1,32 @@
 """
-Pytuck - 轻量级 Python 文档数据库
+Pytucky - 单文件、高性能、纯 Python 文档数据库
 
-基于对象模型的数据库系统，无需编写SQL，支持：
-- SQLAlchemy 2.0 风格 API
-- Pythonic 查询表达式
-- 多存储引擎（Pytuck, JSON, CSV, SQLite, DuckDB, Excel, XML）
-- 索引优化
-- 事务支持
-- 类型安全
+Pytucky 是一个轻量级、单文件格式的文档数据库，专注于提供高性能的读写
+以及与原始 Pytuck API 兼容的基础 ORM 用法。当前项目专注于单一二进制
+后端（PTK 格式），并保留与原有 pytuck 接口的兼容层，方便用户从 pytuck
+迁移到 pytucky：只需将 import pytuck -> import pytucky。
 
-两种使用模式：
+主要特性：
+- 单文件存储（PTK 二进制格式）
+- 基于声明式模型的 ORM（declarative_base, Session, Column）
+- 兼容 Pytuck 的基础查询与迁移工具
+- 围绕当前单文件主路径持续优化性能
 
-1. 纯模型模式（默认，推荐）- 通过 Session 操作数据：
+示例用法（简短）：
     from typing import Type
-    from pytuck import Storage, declarative_base, Session, Column
-    from pytuck import PureBaseModel, select, insert, update, delete
+    from pytucky import Storage, declarative_base, Session, Column
 
-    db = Storage(file_path='mydb.pytuck')
-    Base: Type[PureBaseModel] = declarative_base(db)
+    db = Storage(file_path='mydb.pytucky')
+    Base: Type = declarative_base(db)
 
     class User(Base):
         __tablename__ = 'users'
         id = Column(int, primary_key=True)
         name = Column(str)
-        age = Column(int)
 
     session = Session(db)
 
-    # 插入
-    stmt = insert(User).values(name='Alice', age=20)
-    session.execute(stmt)
-    session.commit()
-
-    # 查询
-    stmt = select(User).where(User.age >= 18)
-    result = session.execute(stmt)
-    users = result.all()
-
-2. Active Record 模式 - 模型自带 CRUD 方法：
-    from typing import Type
-    from pytuck import Storage, declarative_base, Column
-    from pytuck import CRUDBaseModel
-
-    db = Storage(file_path='mydb.pytuck')
-    Base: Type[CRUDBaseModel] = declarative_base(db, crud=True)
-
-    class User(Base):
-        __tablename__ = 'users'
-        id = Column(int, primary_key=True)
-        name = Column(str)
-
-    # 直接在模型上操作
-    user = User.create(name='Alice')
-    user.name = 'Bob'
-    user.save()
-    user.delete()
+请参考项目的 tests/ 目录获取更多使用示例。
 """
 
 from .core import (
@@ -73,6 +45,7 @@ from .query import select, insert, update, delete
 from .query import or_, and_, not_
 from .query import Result, CursorResult
 from .common.exceptions import (
+    PytuckyException,
     PytuckException,
     TableNotFoundError,
     RecordNotFoundError,
@@ -89,6 +62,7 @@ from .common.exceptions import (
     DatabaseConnectionError,
     UnsupportedOperationError,
     MigrationError,
+    PytuckyIndexError,
     PytuckIndexError,
 )
 from .common.options import SyncOptions, SyncResult
@@ -145,7 +119,8 @@ __all__ = [
     # ==================== 异常 ====================
 
     # 基类
-    'PytuckException',
+    'PytuckyException',
+    'PytuckException',  # 兼容旧名称
 
     # 表和记录级异常
     'TableNotFoundError',
@@ -173,5 +148,6 @@ __all__ = [
     'SerializationError',
     'EncryptionError',
     'MigrationError',
-    'PytuckIndexError',
+    'PytuckyIndexError',
+    'PytuckIndexError',  # 兼容旧名称
 ]

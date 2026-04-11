@@ -4,8 +4,8 @@ import pytest
 
 from pytucky import Column
 from pytucky.common.exceptions import SerializationError
-from pytucky.backends.format_v7 import (
-    FileHeaderV7,
+from pytucky.backends.format import (
+    FileHeader,
     PkDirEntry,
     TableBlockRef,
     decode_row,
@@ -14,7 +14,7 @@ from pytucky.backends.format_v7 import (
 
 
 def test_header_roundtrip() -> None:
-    header = FileHeaderV7(
+    header = FileHeader(
         version=7,
         flags=3,
         table_count=2,
@@ -28,7 +28,7 @@ def test_header_roundtrip() -> None:
     blob = header.pack()
 
     assert len(blob) == 64
-    assert FileHeaderV7.unpack(blob) == header
+    assert FileHeader.unpack(blob) == header
 
 
 
@@ -64,11 +64,11 @@ def test_int_pk_dir_entry_roundtrip() -> None:
 
 
 def test_header_unpack_rejects_wrong_magic() -> None:
-    header = FileHeaderV7().pack()
+    header = FileHeader().pack()
     bad = b"NOPE" + header[4:]
 
     with pytest.raises(SerializationError):
-        FileHeaderV7.unpack(bad)
+        FileHeader.unpack(bad)
 
 
 
@@ -142,7 +142,7 @@ def test_encode_row_skips_primary_key_payload() -> None:
 
 
 def test_column_index_meta_roundtrip() -> None:
-    from pytucky.backends.format_v7 import ColumnIndexMeta
+    from pytucky.backends.format import ColumnIndexMeta
 
     cim = ColumnIndexMeta(column_name="name", offset=1234, size=56, entry_count=3, type_code=7)
     packed = cim.pack()

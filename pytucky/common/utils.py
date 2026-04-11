@@ -1,5 +1,5 @@
 """
-Pytuck 工具函数
+Pytucky 工具函数
 """
 
 import hashlib

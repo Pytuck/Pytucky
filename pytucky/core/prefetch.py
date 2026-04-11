@@ -1,12 +1,12 @@
 """
-Pytuck 关系预取 API
+Pytucky 关系预取 API
 
 提供批量预取关联数据功能，解决 Relationship 的 N+1 查询问题。
 
 两种使用方式：
 
 1. 独立函数（对已获取的实例列表批量预取）：
-    from pytuck import prefetch
+    from pytucky import prefetch
 
     users = session.execute(select(User)).all()
     prefetch(users, 'orders')          # 单次查询加载所有用户的 orders

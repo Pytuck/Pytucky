@@ -1,5 +1,5 @@
 """
-Pytuck ORM层
+Pytucky ORM层
 
 提供对象关系映射功能，支持两种模式：
 - PureBaseModel: 纯模型定义，通过 Session 操作数据
@@ -570,11 +570,11 @@ class PureBaseModel:
 
     通过 Session 进行所有数据库操作：
 
-        from pytuck import Storage, declarative_base, Session, Column
-        from pytuck import PureBaseModel
+        from pytucky import Storage, declarative_base, Session, Column
+        from pytucky import PureBaseModel
         from typing import Type
 
-        db = Storage(file_path='mydb.db')
+        db = Storage(file_path='mydb.pytucky')
         Base: Type[PureBaseModel] = declarative_base(db)
 
         class User(Base):
@@ -795,11 +795,11 @@ class CRUDBaseModel(PureBaseModel):
 
     可以直接在模型实例/类上进行数据库操作：
 
-        from pytuck import Storage, declarative_base, Column
-        from pytuck import CRUDBaseModel
+        from pytucky import Storage, declarative_base, Column
+        from pytucky import CRUDBaseModel
         from typing import Type
 
-        db = Storage(file_path='mydb.db')
+        db = Storage(file_path='mydb.pytucky')
         Base: Type[CRUDBaseModel] = declarative_base(db, crud=True)
 
         class User(Base):
@@ -1117,7 +1117,7 @@ def declarative_base(
     Examples:
         # 纯模型（默认，推荐）
         from typing import Type
-        from pytuck import PureBaseModel
+        from pytucky import PureBaseModel
 
         Base: Type[PureBaseModel] = declarative_base(db)
 
@@ -1133,7 +1133,7 @@ def declarative_base(
         session.commit()
 
         # Active Record 模式
-        from pytuck import CRUDBaseModel
+        from pytucky import CRUDBaseModel
 
         Base: Type[CRUDBaseModel] = declarative_base(db, crud=True)
 
@@ -1149,7 +1149,7 @@ def declarative_base(
         post.delete()
 
         # 自动同步 schema（第二次启动加载已有数据库时）
-        from pytuck import SyncOptions
+        from pytucky import SyncOptions
 
         Base = declarative_base(db, sync_schema=True)
 
@@ -1230,7 +1230,7 @@ def _create_pure_base(
             if len(primary_keys) > 1:
                 raise SchemaError(
                     f"Model {cls.__name__} has multiple primary keys: {primary_keys}. "
-                    f"Pytuck only supports single-column primary key or no primary key.",
+                    f"Pytuckyy only supports single-column primary key or no primary key.",
                     table_name=cls.__tablename__
                 )
 
@@ -1346,7 +1346,7 @@ def _create_crud_base(
             if len(primary_keys) > 1:
                 raise SchemaError(
                     f"Model {cls.__name__} has multiple primary keys: {primary_keys}. "
-                    f"Pytuck only supports single-column primary key or no primary key.",
+                    f"Pytuckyy only supports single-column primary key or no primary key.",
                     table_name=cls.__tablename__
                 )
 

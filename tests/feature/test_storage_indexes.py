@@ -36,7 +36,7 @@ def test_index_is_restored_after_reopen(tmp_path: Path) -> None:
 
 @pytest.mark.feature
 def test_reopen_does_not_eager_decode_index(tmp_path: Path, monkeypatch) -> None:
-    """确保 reopen 时不调用 index_v7.decode_sorted_pairs，而是按需在 lookup 时调用"""
+    """确保 reopen 时不调用 index.decode_sorted_pairs，而是按需在 lookup 时调用"""
     db_path = tmp_path / "index-reopen-lazy.pytucky"
     db = Storage(file_path=str(db_path))
     db.create_table(
@@ -52,15 +52,15 @@ def test_reopen_does_not_eager_decode_index(tmp_path: Path, monkeypatch) -> None
     db.close()
 
     # wrap decode_sorted_pairs to count calls
-    from pytucky.backends import index_v7
+    from pytucky.backends import index as backend_index
     calls = {"count": 0}
-    orig = index_v7.decode_sorted_pairs
+    orig = backend_index.decode_sorted_pairs
 
     def counting_decode(blob, column):
         calls["count"] += 1
         return orig(blob, column)
 
-    monkeypatch.setattr(index_v7, 'decode_sorted_pairs', counting_decode)
+    monkeypatch.setattr(backend_index, 'decode_sorted_pairs', counting_decode)
 
     reopened = Storage(file_path=str(db_path))
     # upon reopen we expect zero calls

@@ -1,7 +1,11 @@
 """
-Pytuck 后端模块
+pytucky.backends — 后端包（简化文案）
 
-提供引擎注册、发现和实例化功能
+本包包含项目保留的原生单文件存储引擎模块。当前仓库仅维护
+基于 PTK 二进制格式的后端实现（backend_binary 和兼容适配器）。
+
+注意：保留 registry/get_backend 等工厂和注册器机制以供 Storage 和
+测试使用，但多后端文案已被精简以反映当前项目定位。
 """
 
 from .base import StorageBackend
@@ -16,12 +20,8 @@ from .registry import (
 )
 
 # 导入内置后端模块，触发 __init_subclass__ 自动注册
-# 后端模块的外部依赖使用延迟导入（TYPE_CHECKING + 方法内导入）
-# 所以这些导入不会因缺少依赖而失败
 from . import backend_binary   # noqa: F401
-from . import backend_pytucky_v7_adapter   # noqa: F401
-# 粗裁剪：已移除其他后端（json, jsonl, csv, sqlite, duckdb, excel, xml）
-# 当前仅保留 pytuck(PTK5) 与 pytucky(PTK7) 两种原生单文件格式。
+from . import backend_pytucky   # noqa: F401
 
 __all__ = [
     'StorageBackend',

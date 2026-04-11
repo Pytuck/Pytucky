@@ -1,5 +1,5 @@
 """
-Pytuck 加密模块 - 纯 Python 实现，零外部依赖
+Pytucky 加密模块 - 纯 Python 实现，零外部依赖
 
 提供三级加密支持：
 - low: XOR 混淆（防随手看）

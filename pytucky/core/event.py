@@ -1,5 +1,5 @@
 """
-Pytuck ORM 事件钩子系统
+Pytucky ORM 事件钩子系统
 
 提供轻量级事件回调机制，支持 Model 级和 Storage 级事件。
 
@@ -14,7 +14,7 @@ Storage 级事件：
 - before_flush / after_flush
 
 使用方式：
-    from pytuck import event
+    from pytucky import event
 
     # 装饰器注册
     @event.listens_for(User, 'before_insert')

@@ -15,10 +15,10 @@ from ..common.exceptions import (
 )
 from ..core.orm import Column
 from ..core.types import TypeRegistry
-from .format_v7 import (
+from .format import (
     NULL_BITMAP_STRUCT,
     ColumnIndexMeta,
-    FileHeaderV7,
+    FileHeader,
     PkDirEntry,
     TableBlockRef,
     decode_row,
@@ -68,7 +68,7 @@ class _EncodedTable:
     next_id: int
 
 
-class StoreV7:
+class Store:
     def __init__(self, file_path: Path | str, *, open_existing: bool = True) -> None:
         self.file_path = Path(file_path)
         self._tables: Dict[str, TableState] = {}
@@ -117,7 +117,7 @@ class StoreV7:
     def open(self) -> None:
         self.close()
         with self.file_path.open("rb") as file_obj:
-            header = FileHeaderV7.unpack(file_obj.read(64))
+            header = FileHeader.unpack(file_obj.read(64))
             file_obj.seek(header.schema_offset)
             schema_blob = file_obj.read(header.schema_size)
             schemas = self._decode_schema_catalog(schema_blob, header.table_count)
@@ -145,7 +145,7 @@ class StoreV7:
                     file_obj.seek(ref.index_meta_offset)
                     meta_blob = file_obj.read(ref.index_meta_size)
                     off = 0
-                    from .format_v7 import ColumnIndexMeta
+                    from .format import ColumnIndexMeta
                     while off < len(meta_blob):
                         cim, consumed = ColumnIndexMeta.unpack(meta_blob[off:])
                         # convert offsets to absolute file offsets for easier reading later
@@ -230,7 +230,7 @@ class StoreV7:
         index_data_blobs: Dict[str, bytes] = {}
         ordered_tables = list(self._tables.keys())
 
-        from . import index_v7
+        from . import index
 
         for table_name in ordered_tables:
             state = self._tables[table_name]
@@ -245,8 +245,8 @@ class StoreV7:
             for column in state.columns:
                 if not column.index:
                     continue
-                pairs = index_v7.build_sorted_pairs(live_records, column)
-                column_data_blob = index_v7.encode_sorted_pairs(pairs, column)
+                pairs = index.build_sorted_pairs(live_records, column)
+                column_data_blob = index.encode_sorted_pairs(pairs, column)
                 column_meta = ColumnIndexMeta(
                     column_name=column.name,
                     offset=len(data_blob),
@@ -318,7 +318,7 @@ class StoreV7:
             table_refs_blob.extend(ref.pack())
 
         table_refs_blob_bytes = bytes(table_refs_blob)
-        header = FileHeaderV7(
+        header = FileHeader(
             table_count=len(refs),
             schema_offset=64,
             schema_size=len(schema_catalog),
@@ -641,8 +641,8 @@ class StoreV7:
         cim = state.index_meta.get(column_name)
         if cim is not None:
             blob = self._read_bytes_at(cim.offset, cim.size)
-            from . import index_v7
-            results.update(index_v7.search_sorted_pairs(blob, value, col))
+            from . import index
+            results.update(index.search_sorted_pairs(blob, value, col))
 
         # merge overlay: inserted and updated that match value
         # check inserted

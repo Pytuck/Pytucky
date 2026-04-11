@@ -1,5 +1,5 @@
 """
-Pytuck 查询构建器
+Pytucky 查询构建器
 
 提供链式查询API
 """

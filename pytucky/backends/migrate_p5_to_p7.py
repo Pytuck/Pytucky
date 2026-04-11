@@ -12,7 +12,7 @@ from typing import Union
 
 from ..common.options import BinaryBackendOptions
 from .backend_binary import BinaryBackend
-from .backend_pytucky_v7_adapter import PytuckyV7Backend
+from .backend_pytucky import PytuckyBackend
 
 
 def migrate_pytuck_to_pytucky(
@@ -28,7 +28,7 @@ def migrate_pytuck_to_pytucky(
     if source_backend.supports_lazy_loading():
         source_backend.populate_tables_with_data(tables)
 
-    target_backend = PytuckyV7Backend(target, BinaryBackendOptions())
+    target_backend = PytuckyBackend(target, BinaryBackendOptions())
     target_backend.save(tables)
     return target_backend.file_path
 
