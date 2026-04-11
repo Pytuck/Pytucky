@@ -17,6 +17,7 @@ build/
 docs/superpowers/
 .worktrees/
 # benchmark outputs
+.tmp_bench_profile/
 tests/benchmark/benchmark_output/
 .tmp_bench
 
