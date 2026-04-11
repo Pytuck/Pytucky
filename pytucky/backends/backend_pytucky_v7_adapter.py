@@ -48,6 +48,7 @@ class PytuckyV7Backend(StorageBackend):
         return self.file_path.exists()
 
     def delete(self) -> None:
+        self.store.close()
         if self.file_path.exists():
             self.file_path.unlink()
 
@@ -176,9 +177,7 @@ class PytuckyV7Backend(StorageBackend):
                     cim = state.index_meta.get(self.column_name)
                     result = set()
                     if cim is not None:
-                        with self._store.file_path.open('rb') as f:
-                            f.seek(cim.offset)
-                            blob = f.read(cim.size)
+                        blob = self._store._read_bytes_at(cim.offset, cim.size)
                         from ..backends import index_v7
                         pks = index_v7.range_search_sorted_pairs(blob, self._column, min_val, max_val, include_min, include_max)
                         result.update(pks)
@@ -266,6 +265,7 @@ class PytuckyV7Backend(StorageBackend):
         # Convert high-level tables into StoreV7 internal states and flush via store.flush.
         # Rebuild directly from table scan results to avoid per-row StoreV7.insert overhead.
         del changed_tables
+        self.store.close()
         self.store = StoreV7(self.file_path, open_existing=False)
         rebuilt_tables: Dict[str, TableState] = {}
         for name, table in tables.items():
@@ -288,5 +288,4 @@ class PytuckyV7Backend(StorageBackend):
         self._rebuild_offset_map()
 
     def close(self) -> None:
-        # no-op; StoreV7 manages file handles itself
-        return
+        self.store.close()

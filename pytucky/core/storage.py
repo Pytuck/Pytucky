@@ -2780,9 +2780,10 @@ class Storage:
                     except Exception:
                         pass
                 self._native_sql_in_transaction = False
-            if hasattr(self.backend, 'close'):
-                self.backend.close()
             self._connector = None
+
+        if self.backend and hasattr(self.backend, 'close'):
+            self.backend.close()
 
     def __repr__(self) -> str:
         return f"Storage(tables={len(self.tables)}, in_memory={self.in_memory})"

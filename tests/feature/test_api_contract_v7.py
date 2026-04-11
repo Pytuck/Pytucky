@@ -140,3 +140,32 @@ def test_storage_flush_bulk_loads_store_without_row_by_row_insert(
         assert db.select("users", 2)["name"] == "Bob"
     finally:
         db.close()
+
+
+@pytest.mark.feature
+def test_storage_close_delegates_to_backend_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = Storage(file_path=tmp_path / "close-contract.pytucky")
+    db.create_table(
+        "users",
+        [
+            Column(int, name="id", primary_key=True),
+            Column(str, name="name", nullable=False),
+        ],
+    )
+
+    assert db.backend is not None
+    calls = {"count": 0}
+    original_close = db.backend.close
+
+    def counting_close() -> None:
+        calls["count"] += 1
+        original_close()
+
+    monkeypatch.setattr(db.backend, "close", counting_close)
+
+    db.close()
+
+    assert calls["count"] == 1

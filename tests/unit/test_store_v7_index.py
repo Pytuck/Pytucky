@@ -68,3 +68,32 @@ def test_overlay_changes_visible_in_search_without_flush(tmp_path: Path) -> None
     res = reopened.search_index("users", "name", "Alice")
     # Expect pk 2 (updated) and new_pk, but not 1
     assert set(res) == {2, new_pk}
+
+
+
+def test_repeated_index_search_reuses_single_reader_handle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_path = tmp_path / "index-reader-reuse.pytucky"
+    store = build_store(file_path)
+    store.insert("users", {"name": "Alice", "age": 18})
+    store.insert("users", {"name": "Bob", "age": 20})
+    store.flush()
+
+    reopened = StoreV7(file_path)
+    calls = {"count": 0}
+    path_type = type(file_path)
+    original_open = path_type.open
+
+    def counting_open(self, *args, **kwargs):
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if self == file_path and mode == "rb":
+            calls["count"] += 1
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(path_type, "open", counting_open)
+
+    assert reopened.search_index("users", "name", "Alice") == [1]
+    assert reopened.search_index("users", "name", "Bob") == [2]
+    assert calls["count"] == 1

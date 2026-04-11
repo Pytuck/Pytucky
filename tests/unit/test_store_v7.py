@@ -43,6 +43,35 @@ def test_open_loads_only_directory_metadata(tmp_path: Path) -> None:
 
 
 
+def test_repeated_select_reuses_single_reader_handle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_path = tmp_path / "reader-reuse.pytucky"
+    store = build_store(file_path)
+    store.insert("users", {"name": "Alice", "age": 18})
+    store.insert("users", {"name": "Bob", "age": 20})
+    store.flush()
+
+    reopened = StoreV7(file_path)
+    calls = {"count": 0}
+    path_type = type(file_path)
+    original_open = path_type.open
+
+    def counting_open(self, *args, **kwargs):
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if self == file_path and mode == "rb":
+            calls["count"] += 1
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(path_type, "open", counting_open)
+
+    assert reopened.select("users", 1)["name"] == "Alice"
+    assert reopened.select("users", 2)["name"] == "Bob"
+    assert calls["count"] == 1
+
+
+
 def test_insert_is_visible_before_flush(tmp_path: Path) -> None:
     store = build_store(tmp_path / "overlay-insert.pytucky")
 

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import os
 import struct
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, BinaryIO, Dict, List, Optional, Tuple
 
 from ..common.exceptions import (
     DuplicateKeyError,
@@ -72,6 +72,7 @@ class StoreV7:
     def __init__(self, file_path: Path | str, *, open_existing: bool = True) -> None:
         self.file_path = Path(file_path)
         self._tables: Dict[str, TableState] = {}
+        self._reader: Optional[BinaryIO] = None
         # Optionally open existing file. When open_existing is False we start with an empty in-memory state
         if open_existing and self.file_path.exists() and self.file_path.is_file() and self.file_path.stat().st_size > 0:
             self.open()
@@ -98,7 +99,23 @@ class StoreV7:
             data_size=0,
         )
 
+    def close(self) -> None:
+        if self._reader is not None and not self._reader.closed:
+            self._reader.close()
+        self._reader = None
+
+    def _get_reader(self) -> BinaryIO:
+        if self._reader is None or self._reader.closed:
+            self._reader = self.file_path.open("rb")
+        return self._reader
+
+    def _read_bytes_at(self, offset: int, size: int) -> bytes:
+        reader = self._get_reader()
+        reader.seek(offset)
+        return reader.read(size)
+
     def open(self) -> None:
+        self.close()
         with self.file_path.open("rb") as file_obj:
             header = FileHeaderV7.unpack(file_obj.read(64))
             file_obj.seek(header.schema_offset)
@@ -310,6 +327,7 @@ class StoreV7:
             file_size=current_offset,
         )
 
+        self.close()
         temp_path = self.file_path.with_suffix(self.file_path.suffix + ".tmp")
         with temp_path.open("wb") as file_obj:
             file_obj.write(header.pack())
@@ -426,9 +444,7 @@ class StoreV7:
         return sorted(live.items(), key=lambda item: item[0])
 
     def _read_row_at(self, state: TableState, pk: Any, offset: int, length: int) -> Dict[str, Any]:
-        with self.file_path.open("rb") as file_obj:
-            file_obj.seek(offset)
-            row_blob = file_obj.read(length)
+        row_blob = self._read_bytes_at(offset, length)
         if len(row_blob) < ROW_LENGTH_STRUCT.size:
             raise SerializationError("Not enough data to decode row length")
         payload_length = ROW_LENGTH_STRUCT.unpack(row_blob[: ROW_LENGTH_STRUCT.size])[0]
@@ -624,9 +640,7 @@ class StoreV7:
         # first, load on-disk index results if available
         cim = state.index_meta.get(column_name)
         if cim is not None:
-            with self.file_path.open('rb') as file_obj:
-                file_obj.seek(cim.offset)
-                blob = file_obj.read(cim.size)
+            blob = self._read_bytes_at(cim.offset, cim.size)
             from . import index_v7
             results.update(index_v7.search_sorted_pairs(blob, value, col))
 
