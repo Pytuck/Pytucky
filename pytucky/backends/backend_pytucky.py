@@ -92,87 +92,178 @@ class PytuckyBackend(StorageBackend):
             from ..core.index import HashIndex, SortedIndex
 
             class HashIndexProxy(HashIndex):
+                """延迟物化哈希索引代理。
+
+                首次 lookup 时从磁盘解码索引 blob 并填充父类 HashIndex 的
+                内存结构，后续 lookup 直接走 O(1) 的 dict 查找。
+                物化前通过 _added/_removed overlay 暂存内存变更，
+                物化时合并进父类数据结构。
+                """
+
                 def __init__(self, column_name: str, store: 'Store', table_name: str, column_obj: Column):
                     super().__init__(column_name)
                     self._store = store
                     self._table = table_name
                     self._column = column_obj
-                    # overlays for unflushed in-memory changes applied via index.insert/remove
+                    self._materialized = False
                     self._added: Dict[Any, set] = {}
                     self._removed: Dict[Any, set] = {}
 
+                def _materialize(self) -> None:
+                    if self._materialized:
+                        return
+                    # 从磁盘读取索引 blob 并解码
+                    state = self._store.table_state(self._table)
+                    cim = state.index_meta.get(self.column_name)
+                    if cim is not None:
+                        blob = self._store._read_bytes_at(cim.offset, cim.size)
+                        from . import index as idx_mod
+                        pairs = idx_mod.decode_sorted_pairs(blob, self._column)
+                        for val, pk in pairs:
+                            HashIndex.insert(self, val, pk)
+                    # 合并 Store overlay（inserted/updated/deleted）
+                    overlay = state.overlay
+                    col_name = self.column_name
+                    for pk, rec in overlay.inserted.items():
+                        if pk not in overlay.deleted:
+                            v = rec.get(col_name)
+                            if v is not None:
+                                HashIndex.insert(self, v, pk)
+                    for pk, rec in overlay.updated.items():
+                        if pk not in overlay.deleted:
+                            v = rec.get(col_name)
+                            if v is not None:
+                                HashIndex.insert(self, v, pk)
+                    for pk in overlay.deleted:
+                        # 需要知道被删除记录的旧值才能从索引中移除
+                        # 但 overlay 不保存旧值，已在磁盘索引中被包含
+                        # 用暴力方式：遍历 map 移除该 pk
+                        for pk_set in self.map.values():
+                            pk_set.discard(pk)
+                    # 合并 proxy 自身的 overlay
+                    for val, pks in self._added.items():
+                        for pk in pks:
+                            HashIndex.insert(self, val, pk)
+                    for val, pks in self._removed.items():
+                        for pk in pks:
+                            HashIndex.remove(self, val, pk)
+                    self._added.clear()
+                    self._removed.clear()
+                    self._materialized = True
+
                 def insert(self, value: Any, pk: Any) -> None:
-                    # maintain local added overlay; do not write to disk
                     if value is None:
                         return
-                    self._added.setdefault(value, set()).add(pk)
-                    # if previously marked removed for this value, unmark
-                    if value in self._removed:
-                        self._removed[value].discard(pk)
+                    if self._materialized:
+                        HashIndex.insert(self, value, pk)
+                    else:
+                        self._added.setdefault(value, set()).add(pk)
+                        if value in self._removed:
+                            self._removed[value].discard(pk)
 
                 def remove(self, value: Any, pk: Any) -> None:
                     if value is None:
                         return
-                    # prefer removing from added overlay first
-                    if value in self._added:
-                        self._added[value].discard(pk)
-                        if not self._added[value]:
-                            del self._added[value]
-                    # mark as removed
-                    self._removed.setdefault(value, set()).add(pk)
+                    if self._materialized:
+                        HashIndex.remove(self, value, pk)
+                    else:
+                        if value in self._added:
+                            self._added[value].discard(pk)
+                            if not self._added[value]:
+                                del self._added[value]
+                        self._removed.setdefault(value, set()).add(pk)
 
                 def lookup(self, value: Any):
-                    # base results from store (on-disk + store overlay)
-                    try:
-                        base = set(self._store.search_index(self._table, self.column_name, value))
-                    except Exception:
-                        base = set()
-                    # apply additions and removals from proxy overlay
-                    base.update(self._added.get(value, set()))
-                    for pk in self._removed.get(value, set()):
-                        base.discard(pk)
-                    return set(base)
+                    self._materialize()
+                    return HashIndex.lookup(self, value)
 
             class SortedIndexProxy(SortedIndex):
+                """延迟物化有序索引代理。
+
+                首次 lookup/range_query 时从磁盘解码索引并填充父类
+                SortedIndex 的内存结构，后续操作走 O(log n) 的二分查找。
+                """
+
                 def __init__(self, column_name: str, store: 'Store', table_name: str, column_obj: Column):
                     super().__init__(column_name)
                     self._store = store
                     self._table = table_name
                     self._column = column_obj
+                    self._materialized = False
                     self._added: Dict[Any, set] = {}
                     self._removed: Dict[Any, set] = {}
+
+                def _materialize(self) -> None:
+                    if self._materialized:
+                        return
+                    state = self._store.table_state(self._table)
+                    cim = state.index_meta.get(self.column_name)
+                    if cim is not None:
+                        blob = self._store._read_bytes_at(cim.offset, cim.size)
+                        from . import index as idx_mod
+                        pairs = idx_mod.decode_sorted_pairs(blob, self._column)
+                        for val, pk in pairs:
+                            SortedIndex.insert(self, val, pk)
+                    # 合并 Store overlay
+                    overlay = state.overlay
+                    col_name = self.column_name
+                    for pk, rec in overlay.inserted.items():
+                        if pk not in overlay.deleted:
+                            v = rec.get(col_name)
+                            if v is not None:
+                                SortedIndex.insert(self, v, pk)
+                    for pk, rec in overlay.updated.items():
+                        if pk not in overlay.deleted:
+                            v = rec.get(col_name)
+                            if v is not None:
+                                SortedIndex.insert(self, v, pk)
+                    for pk in overlay.deleted:
+                        for pk_set in self.value_to_pks.values():
+                            pk_set.discard(pk)
+                    # 合并 proxy overlay
+                    for val, pks in self._added.items():
+                        for pk in pks:
+                            SortedIndex.insert(self, val, pk)
+                    for val, pks in self._removed.items():
+                        for pk in pks:
+                            SortedIndex.remove(self, val, pk)
+                    self._added.clear()
+                    self._removed.clear()
+                    self._materialized = True
 
                 def insert(self, value: Any, pk: Any) -> None:
                     if value is None:
                         return
-                    self._added.setdefault(value, set()).add(pk)
-                    if value in self._removed:
-                        self._removed[value].discard(pk)
+                    if self._materialized:
+                        SortedIndex.insert(self, value, pk)
+                    else:
+                        self._added.setdefault(value, set()).add(pk)
+                        if value in self._removed:
+                            self._removed[value].discard(pk)
 
                 def remove(self, value: Any, pk: Any) -> None:
                     if value is None:
                         return
-                    if value in self._added:
-                        self._added[value].discard(pk)
-                        if not self._added[value]:
-                            del self._added[value]
-                    self._removed.setdefault(value, set()).add(pk)
+                    if self._materialized:
+                        SortedIndex.remove(self, value, pk)
+                    else:
+                        if value in self._added:
+                            self._added[value].discard(pk)
+                            if not self._added[value]:
+                                del self._added[value]
+                        self._removed.setdefault(value, set()).add(pk)
 
                 def lookup(self, value: Any):
-                    try:
-                        base = set(self._store.search_index(self._table, self.column_name, value))
-                    except Exception:
-                        base = set()
-                    base.update(self._added.get(value, set()))
-                    for pk in self._removed.get(value, set()):
-                        base.discard(pk)
-                    return set(base)
+                    self._materialize()
+                    return SortedIndex.lookup(self, value)
 
                 def supports_range_query(self) -> bool:
                     return True
 
                 def range_query(self, min_val=None, max_val=None, include_min=True, include_max=True):
-                    # If store has index metadata, use index.range_search_sorted_pairs reading the blob on demand
+                    if self._materialized:
+                        return SortedIndex.range_query(self, min_val, max_val, include_min, include_max)
+                    # 未物化时保持原有 blob-based 快速路径
                     state = self._store.table_state(self._table)
                     cim = state.index_meta.get(self.column_name)
                     result = set()
@@ -182,7 +273,6 @@ class PytuckyBackend(StorageBackend):
                         pks = index.range_search_sorted_pairs(blob, self._column, min_val, max_val, include_min, include_max)
                         result.update(pks)
                     else:
-                        # fallback: scan pk list via store.select (may be slower)
                         for pk in list(state.pk_index.keys()):
                             try:
                                 rec = self._store.select(self._table, pk)
@@ -198,7 +288,7 @@ class PytuckyBackend(StorageBackend):
                                 if (val > max_val) or (not include_max and val == max_val):
                                     continue
                             result.add(pk)
-                    # merge proxy overlays
+                    # 合并 proxy overlays
                     for val, pks in self._added.items():
                         if min_val is not None and ((val < min_val) or (not include_min and val == min_val)):
                             continue

@@ -7,8 +7,7 @@ from pytucky.common.options import BinaryBackendOptions
 def build_user_storage(file_path: Path, *, lazy_load: bool = True) -> Storage:
     storage = Storage(
         file_path=file_path,
-        engine="pytucky",
-        backend_options=BinaryBackendOptions(lazy_load=lazy_load),
+        backend_options=BinaryBackendOptions(),
     )
     storage.create_table(
         "users",

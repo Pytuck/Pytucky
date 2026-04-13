@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 
 from pytucky import Column, Storage
-from pytucky.backends import get_backend, is_valid_pytuck_database
 from pytucky.backends.backend_pytucky import PytuckyBackend
 from pytucky.common.options import BinaryBackendOptions
 
@@ -11,7 +10,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_get_backend_returns_v7_backend(tmp_path: Path) -> None:
-    backend = get_backend('pytucky', tmp_path / 'probe.pytucky', BinaryBackendOptions())
+    backend = PytuckyBackend(tmp_path / 'probe.pytucky', BinaryBackendOptions())
 
     assert isinstance(backend, PytuckyBackend)
 
@@ -50,9 +49,6 @@ def test_probe_and_registry_match_valid_ptk7_file(tmp_path: Path) -> None:
         db.close()
 
     matched, info = PytuckyBackend.probe(file_path)
-    valid, engine = is_valid_pytuck_database(file_path)
 
     assert matched is True
     assert info == {'engine': 'pytucky', 'version': 7}
-    assert valid is True
-    assert engine == 'pytucky'

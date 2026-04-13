@@ -1,18 +1,10 @@
 """
 Pytucky - 单文件、高性能、纯 Python 文档数据库
 
-Pytucky 是一个轻量级、单文件格式的文档数据库，专注于提供高性能的读写
-以及与原始 Pytuck API 兼容的基础 ORM 用法。当前项目专注于单一二进制
-后端（PTK 格式），并保留与原有 pytuck 接口的兼容层，方便用户从 pytuck
-迁移到 pytucky：只需将 import pytuck -> import pytucky。
+基于 PTK7 二进制格式的轻量级文档数据库，专为受限 Python 环境设计。
+提供类似 SQLAlchemy 的声明式 ORM API，无外部依赖。
 
-主要特性：
-- 单文件存储（PTK 二进制格式）
-- 基于声明式模型的 ORM（declarative_base, Session, Column）
-- 兼容 Pytuck 的基础查询与迁移工具
-- 围绕当前单文件主路径持续优化性能
-
-示例用法（简短）：
+示例用法：
     from typing import Type
     from pytucky import Storage, declarative_base, Session, Column
 
@@ -66,7 +58,6 @@ from .common.exceptions import (
     PytuckIndexError,
 )
 from .common.options import SyncOptions, SyncResult
-from .backends.migrate_p5_to_p7 import migrate_pytuck_to_pytucky, migrate_p5_to_p7
 
 __version__ = '1.0.0'
 __all__ = [
@@ -104,10 +95,6 @@ __all__ = [
     'SyncOptions',        # 同步选项
     'SyncResult',         # 同步结果
 
-    # 迁移工具
-    'migrate_pytuck_to_pytucky',  # PTK5 -> PTK7 显式迁移
-    'migrate_p5_to_p7',           # 迁移别名
-
     # 查询结果
     'Result',        # 查询结果包装器
     'CursorResult',  # CUD 操作结果
@@ -139,15 +126,15 @@ __all__ = [
     # 查询异常
     'QueryError',
 
-    # 连接和事务异常
-    'DatabaseConnectionError',
+    # 事务异常
     'TransactionError',
+    'DatabaseConnectionError',  # 兼容保留
 
     # 操作异常
     'UnsupportedOperationError',
     'SerializationError',
-    'EncryptionError',
-    'MigrationError',
+    'EncryptionError',     # 兼容保留
+    'MigrationError',      # 兼容保留
     'PytuckyIndexError',
     'PytuckIndexError',  # 兼容旧名称
 ]

@@ -12,7 +12,3 @@ def test_get_default_backend_options_returns_binary_for_known_and_unknown_engine
 
     for value in (known, current, unknown, fallback):
         assert isinstance(value, BinaryBackendOptions)
-        assert value.lazy_load is True
-        assert value.sidecar_wal is False
-        assert value.encryption is None
-        assert value.password is None

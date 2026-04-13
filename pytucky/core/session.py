@@ -235,11 +235,6 @@ class Session:
         """
         self.flush()
 
-        # 原生 SQL 模式：提交连接器事务
-        if self.storage._native_sql_mode:
-            self.storage._native_sql_commit_transaction()
-
-        # 如果启用了 auto_flush，触发持久化
         if self.storage.auto_flush:
             self.storage.flush()
 
@@ -247,9 +242,6 @@ class Session:
         """
         回滚事务（清空所有待处理修改）
         """
-        # 原生 SQL 模式：回滚连接器事务
-        if self.storage._native_sql_mode:
-            self.storage._native_sql_rollback_transaction()
 
         self._new_objects.clear()
         self._dirty_objects.clear()
@@ -527,11 +519,6 @@ class Session:
         from ..query.statements import Select, Insert, Update, Delete
         from ..query.result import Result, CursorResult
 
-        # 原生 SQL 模式：使用编译器执行
-        if self.storage.is_native_sql_mode:
-            return self._execute_native_sql(statement)
-
-        # 内存模式：现有执行路径
         if isinstance(statement, Select):
             records = statement._execute(self.storage)
             # 传递 session 引用给 Result，用于自动注册实例
@@ -562,212 +549,6 @@ class Session:
                 f"Unsupported statement type: {type(statement).__name__}",
                 details={'statement_type': type(statement).__name__}
             )
-
-    def _execute_native_sql(self, statement: Statement) -> Union[Result, CursorResult]:
-        """
-        原生 SQL 模式下执行语句
-
-        使用 SQL 编译器将语句编译为 SQL 并直接在数据库上执行。
-
-        Args:
-            statement: Statement 对象
-
-        Returns:
-            Result 或 CursorResult
-        """
-        from ..query.statements import Select, Insert, Update, Delete
-        from ..query.compiler import QueryCompiler
-        from ..query.result import Result, CursorResult
-
-        compiler = QueryCompiler()
-
-        assert self.storage._connector is not None, "Connector must not be None in native SQL mode"
-        connector = self.storage._connector
-
-        if isinstance(statement, Select):
-            # 编译并执行 SELECT
-            if compiler.can_compile(statement):
-                table = self.storage.get_table(statement.model_class.__tablename__)
-                compiled = compiler.compile(statement)
-                cursor = connector.execute(compiled.sql, compiled.params)
-                rows_raw = cursor.fetchall()
-                col_names = [desc[0] for desc in cursor.description] if cursor.description else []
-                rows = [dict(zip(col_names, row)) for row in rows_raw]
-
-                # 反序列化记录
-                records = [self._deserialize_record(row, table.columns) for row in rows]
-                return Result(records, statement.model_class, 'select', session=self,
-                              options=getattr(statement, '_options', []))
-
-            else:
-                # 回退到内存执行
-                records = statement._execute(self.storage)
-                return Result(records, statement.model_class, 'select', session=self,
-                              options=getattr(statement, '_options', []))
-
-        elif isinstance(statement, Insert):
-            # 编译并执行 INSERT
-            table = self.storage.get_table(statement.model_class.__tablename__)
-
-            # 批量插入路径（values_list）
-            if statement._values_list is not None:
-                validated_records: List[Dict[str, Any]] = []
-                for record in statement._values_list:
-                    validated_data_batch: Dict[str, Any] = {}
-                    for attr_name, value in record.items():
-                        if attr_name in statement.model_class.__columns__:
-                            model_column = statement.model_class.__columns__[attr_name]
-                            db_col_name = model_column.name if model_column.name else attr_name
-                            if db_col_name in table.columns:
-                                column = table.columns[db_col_name]
-                                validated_data_batch[db_col_name] = column.validate(value)
-                    validated_records.append(validated_data_batch)
-
-                pks = self.storage.bulk_insert(
-                    statement.model_class.__tablename__,
-                    validated_records
-                )
-                first_pk = pks[0] if pks else None
-                return CursorResult(
-                    len(pks), statement.model_class, 'insert', inserted_pk=first_pk
-                )
-
-            # 单条插入路径
-            # 验证和序列化值（使用 Column.name 作为存储键）
-            validated_data = {}
-            for attr_name, value in statement._values.items():
-                # 将属性名转换为 Column.name
-                if attr_name in statement.model_class.__columns__:
-                    model_column = statement.model_class.__columns__[attr_name]
-                    db_col_name = model_column.name if model_column.name else attr_name
-                    if db_col_name in table.columns:
-                        column = table.columns[db_col_name]
-                        validated_data[db_col_name] = column.validate(value)
-
-            pk = self.storage.insert(
-                statement.model_class.__tablename__,
-                validated_data
-            )
-
-            return CursorResult(1, statement.model_class, 'insert', inserted_pk=pk)
-
-        elif isinstance(statement, Update):
-            # 编译并执行 UPDATE
-            table = self.storage.get_table(statement.model_class.__tablename__)
-            pk_attr_name = statement.model_class.__primary_key__
-
-            # 获取主键的 Column.name
-            pk_col_name = pk_attr_name
-            if pk_attr_name and pk_attr_name in statement.model_class.__columns__:
-                pk_column = statement.model_class.__columns__[pk_attr_name]
-                pk_col_name = pk_column.name if pk_column.name else pk_attr_name
-
-            # 验证值（使用 Column.name 作为存储键）
-            validated_data = {}
-            for attr_name, value in statement._values.items():
-                # 将属性名转换为 Column.name
-                if attr_name in statement.model_class.__columns__:
-                    model_column = statement.model_class.__columns__[attr_name]
-                    db_col_name = model_column.name if model_column.name else attr_name
-                    if db_col_name in table.columns:
-                        column = table.columns[db_col_name]
-                        validated_data[db_col_name] = column.validate(value)
-
-            # 优化：主键直接更新（仅对简单 BinaryExpression 生效）
-            pk_value = None
-            if len(statement._where_clauses) == 1:
-                expr = statement._where_clauses[0]
-                if isinstance(expr, BinaryExpression):
-                    # 比较属性名（_attr_name）而非 Column.name
-                    if expr.column._attr_name == pk_attr_name and expr.operator in ('=', '=='):
-                        pk_value = expr.value
-
-            if pk_value is not None:
-                # 主键直接更新
-                count = connector.update_row(
-                    statement.model_class.__tablename__,
-                    pk_col_name,
-                    pk_value,
-                    validated_data
-                )
-                return CursorResult(count, statement.model_class, 'update')
-            else:
-                # 条件更新
-                count = statement._execute(self.storage)
-                return CursorResult(count, statement.model_class, 'update')
-
-        elif isinstance(statement, Delete):
-            # 编译并执行 DELETE
-            pk_attr_name = statement.model_class.__primary_key__
-
-            # 获取主键的 Column.name
-            pk_col_name = pk_attr_name
-            if pk_attr_name and pk_attr_name in statement.model_class.__columns__:
-                pk_column = statement.model_class.__columns__[pk_attr_name]
-                pk_col_name = pk_column.name if pk_column.name else pk_attr_name
-
-            # 优化：主键直接删除（仅对简单 BinaryExpression 生效）
-            pk_value = None
-            if len(statement._where_clauses) == 1:
-                expr = statement._where_clauses[0]
-                if isinstance(expr, BinaryExpression):
-                    # 比较属性名（_attr_name）而非 Column.name
-                    if expr.column._attr_name == pk_attr_name and expr.operator in ('=', '=='):
-                        pk_value = expr.value
-
-            if pk_value is not None:
-                # 主键直接删除
-                count = connector.delete_row(
-                    statement.model_class.__tablename__,
-                    pk_col_name,
-                    pk_value
-                )
-                return CursorResult(count, statement.model_class, 'delete')
-            else:
-                # 条件删除
-                count = statement._execute(self.storage)
-                return CursorResult(count, statement.model_class, 'delete')
-
-        else:
-            raise QueryError(
-                f"Unsupported statement type: {type(statement).__name__}",
-                details={'statement_type': type(statement).__name__}
-            )
-
-    @staticmethod
-    def _deserialize_record(record: dict, columns: dict) -> dict:
-        """
-        反序列化数据库记录
-
-        将数据库存储格式转换为 Python 对象。
-
-        Args:
-            record: 原始记录字典
-            columns: 列定义字典
-
-        Returns:
-            反序列化后的记录字典
-        """
-        from datetime import datetime, date, timedelta
-        from .types import TypeRegistry
-        import json
-
-        result: dict = {}
-        for col_name, value in record.items():
-            if col_name in columns and value is not None:
-                column = columns[col_name]
-                col_type = column.col_type
-
-                if col_type == bool and isinstance(value, int):
-                    value = bool(value)
-                elif col_type in (datetime, date, timedelta) and isinstance(value, str):
-                    value = TypeRegistry.deserialize_from_text(value, col_type)
-                elif col_type in (list, dict) and isinstance(value, str):
-                    value = json.loads(value)
-
-            result[col_name] = value
-
-        return result
 
     def _register_instance(self, instance: PureBaseModel) -> None:
         """
