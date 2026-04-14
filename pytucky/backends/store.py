@@ -21,6 +21,7 @@ from .format import (
     PkDirEntry,
     TableBlockRef,
     decode_row,
+    _payload_columns,
 )
 
 
@@ -465,17 +466,35 @@ class Store:
 
     def _materialize_records(self, state: TableState) -> List[Tuple[Any, Dict[str, Any]]]:
         live: Dict[Any, Dict[str, Any]] = {}
-        for pk in state.pk_index:
-            if pk in state.overlay.deleted:
-                continue
-            if pk in state.overlay.updated:
+        # overlay 覆盖部分：updated 和 inserted 优先
+        for pk in state.overlay.updated:
+            if pk not in state.overlay.deleted:
                 live[pk] = dict(state.overlay.updated[pk])
-                continue
-            live[pk] = self.select(state.name, pk)
         for pk, record in state.overlay.inserted.items():
-            if pk in state.overlay.deleted:
-                continue
-            live[pk] = dict(record)
+            if pk not in state.overlay.deleted:
+                live[pk] = dict(record)
+        # 需从磁盘读的 pk（排除 overlay 已覆盖和已删除的）
+        disk_pks = [
+            pk for pk in state.pk_index
+            if pk not in state.overlay.deleted
+            and pk not in state.overlay.updated
+        ]
+        if disk_pks:
+            # 一次性读取整个 data_blob，避免逐行 seek
+            data_blob = self._read_bytes_at(state.data_offset, state.data_size)
+            # 预构建 codec 列表，避免逐行逐列重复查找
+            payload_cols = _payload_columns(state.columns, state.primary_key)
+            codecs = [TypeRegistry.get_codec(c.col_type)[1] for c in payload_cols]
+            for pk in disk_pks:
+                abs_off, length = state.pk_index[pk]
+                rel_off = abs_off - state.data_offset
+                row_blob = data_blob[rel_off:rel_off + length]
+                payload_length = ROW_LENGTH_STRUCT.unpack(row_blob[:ROW_LENGTH_STRUCT.size])[0]
+                payload = row_blob[ROW_LENGTH_STRUCT.size:]
+                record = decode_row(state.columns, payload, pk_name=state.primary_key, codecs=codecs)
+                if state.primary_key is not None:
+                    record[state.primary_key] = pk
+                live[pk] = record
         return sorted(live.items(), key=lambda item: item[0])
 
     def _passthrough_unchanged_table(self, state: TableState) -> _EncodedTable:

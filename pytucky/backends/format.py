@@ -201,7 +201,7 @@ def encode_row(columns: List[Column], record: Dict[str, Any], pk_name: Optional[
     return NULL_BITMAP_STRUCT.pack(null_bits) + bytes(payload)
 
 
-def decode_row(columns: List[Column], payload: bytes, pk_name: Optional[str] = None) -> Dict[str, Any]:
+def decode_row(columns: List[Column], payload: bytes, pk_name: Optional[str] = None, *, codecs: Optional[list] = None) -> Dict[str, Any]:
     payload_columns = _payload_columns(columns, pk_name)
     if len(payload) < NULL_BITMAP_STRUCT.size:
         raise SerializationError("Not enough data to decode row null bitmap")
@@ -213,7 +213,7 @@ def decode_row(columns: List[Column], payload: bytes, pk_name: Optional[str] = N
         if null_bits & (1 << index):
             decoded[column.name] = None
             continue
-        _, codec = TypeRegistry.get_codec(column.col_type)
+        codec = codecs[index] if codecs is not None else TypeRegistry.get_codec(column.col_type)[1]
         try:
             value, consumed = codec.decode(payload[offset:])
         except SerializationError:

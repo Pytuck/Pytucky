@@ -4,6 +4,7 @@ Session - 会话管理器
 提供类似 SQLAlchemy 的 Session 模式，统一管理数据库操作。
 """
 
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Type, Tuple, Union, Generator, overload
 from contextlib import contextmanager
 
@@ -63,7 +64,9 @@ class Session:
 
         # 对象状态追踪
         self._new_objects: List[PureBaseModel] = []      # 待插入对象
+        self._new_objects_set: set = set()               # O(1) 去重
         self._dirty_objects: List[PureBaseModel] = []    # 待更新对象
+        self._dirty_objects_set: set = set()             # O(1) 去重
         self._deleted_objects: List[PureBaseModel] = []  # 待删除对象
 
         # 标识映射：缓存已加载的对象 {(model_class, pk): instance}
@@ -79,8 +82,10 @@ class Session:
         Args:
             instance: 模型实例
         """
-        if instance not in self._new_objects:
+        obj_id = id(instance)
+        if obj_id not in self._new_objects_set:
             self._new_objects.append(instance)
+            self._new_objects_set.add(obj_id)
 
         if self.autocommit:
             self.commit()
@@ -103,8 +108,10 @@ class Session:
             instance: 模型实例
         """
         # 从新增列表中移除（如果还未持久化）
-        if instance in self._new_objects:
+        obj_id = id(instance)
+        if obj_id in self._new_objects_set:
             self._new_objects.remove(instance)
+            self._new_objects_set.discard(obj_id)
         else:
             # 已持久化的对象标记为待删除
             if instance not in self._deleted_objects:
@@ -117,47 +124,58 @@ class Session:
         """
         将待处理的修改刷新到数据库（不提交事务）
         """
-        # 1. 处理待插入对象
-        for instance in self._new_objects:
-            table_name = instance.__tablename__
-            assert table_name is not None, f"Model {instance.__class__.__name__} must have __tablename__ defined"
+        # 1. 处理待插入对象（按模型类分组，批量插入以减少逐条开销）
+        if self._new_objects:
+            # 按模型类分组，保持组内插入顺序
+            groups: OrderedDict[type, List[PureBaseModel]] = OrderedDict()
+            for instance in self._new_objects:
+                cls = instance.__class__
+                if cls not in groups:
+                    groups[cls] = []
+                groups[cls].append(instance)
 
-            # 触发 before_insert 事件（可在回调中修改实例字段）
-            event.dispatch_model(instance.__class__, 'before_insert', instance)
+            for model_class, instances in groups.items():
+                table_name = model_class.__tablename__
+                assert table_name is not None, f"Model {model_class.__name__} must have __tablename__ defined"
 
-            # 构建要插入的数据（使用 Column.name 作为存储键）
-            data = {}
-            for attr_name, column in instance.__columns__.items():
-                value = getattr(instance, attr_name, None)
-                if value is not None:
-                    # 使用 Column.name 作为存储键
-                    db_col_name = column.name if column.name else attr_name
-                    data[db_col_name] = value
+                # 逐个触发 before_insert 事件（保持语义一致，回调可修改实例字段）
+                for instance in instances:
+                    event.dispatch_model(model_class, 'before_insert', instance)
 
-            # 插入到数据库
-            pk = self.storage.insert(table_name, data)
+                # 批量构建数据字典列表
+                records: List[Dict[str, Any]] = []
+                for instance in instances:
+                    data: Dict[str, Any] = {}
+                    for attr_name, column in instance.__columns__.items():
+                        value = getattr(instance, attr_name, None)
+                        if value is not None:
+                            db_col_name = column.name if column.name else attr_name
+                            data[db_col_name] = value
+                    records.append(data)
 
-            # 设置主键（或隐式 rowid）
-            pk_name = instance.__primary_key__
-            if pk_name:
-                setattr(instance, pk_name, pk)
-            else:
-                # 无主键时，使用隐式 rowid
-                setattr(instance, '_pytuck_rowid', pk)
+                # 批量插入（Table.bulk_insert 批量分配 PK + 批量验证 + 批量索引更新）
+                pks = self.storage.bulk_insert(table_name, records)
 
-            # 从数据库重新读取并更新实例（刷新所有字段，类似 SQLAlchemy）
-            db_record = self.storage.select(table_name, pk)
-            for db_col_name, value in db_record.items():
-                if db_col_name != PSEUDO_PK_NAME:
-                    # 将 Column.name 转换回属性名
-                    attr_name = instance._column_to_attr_name(db_col_name) or db_col_name
-                    object.__setattr__(instance, attr_name, value)
+                # 逐个：设置 PK → 刷新字段 → 注册 identity map → 触发 after_insert
+                table = self.storage.get_table(table_name)
+                pk_name = model_class.__primary_key__
+                for i, instance in enumerate(instances):
+                    pk = pks[i]
+                    if pk_name:
+                        setattr(instance, pk_name, pk)
+                    else:
+                        setattr(instance, '_pytuck_rowid', pk)
 
-            # 注册到标识映射（使用统一的方法，设置 session 引用）
-            self._register_instance(instance)
+                    # 从 table.data 直接读取已验证记录（替代 storage.select readback）
+                    db_record = table.data.get(pk)
+                    if db_record is not None:
+                        for db_col_name, value in db_record.items():
+                            if db_col_name != PSEUDO_PK_NAME:
+                                attr_name = instance._column_to_attr_name(db_col_name) or db_col_name
+                                object.__setattr__(instance, attr_name, value)
 
-            # 触发 after_insert 事件（实例已有 pk，已刷新）
-            event.dispatch_model(instance.__class__, 'after_insert', instance)
+                    self._register_instance(instance)
+                    event.dispatch_model(model_class, 'after_insert', instance)
 
         # 2. 处理待更新对象
         for instance in self._dirty_objects:
@@ -226,7 +244,9 @@ class Session:
 
         # 清空待处理列表
         self._new_objects.clear()
+        self._new_objects_set.clear()
         self._dirty_objects.clear()
+        self._dirty_objects_set.clear()
         self._deleted_objects.clear()
 
     def commit(self) -> None:
@@ -244,7 +264,9 @@ class Session:
         """
 
         self._new_objects.clear()
+        self._new_objects_set.clear()
         self._dirty_objects.clear()
+        self._dirty_objects_set.clear()
         self._deleted_objects.clear()
         self._identity_map.clear()
 
@@ -595,8 +617,10 @@ class Session:
         Args:
             instance: 模型实例
         """
-        if instance not in self._dirty_objects and instance not in self._new_objects:
+        obj_id = id(instance)
+        if obj_id not in self._dirty_objects_set and obj_id not in self._new_objects_set:
             self._dirty_objects.append(instance)
+            self._dirty_objects_set.add(obj_id)
 
     def merge(self, instance: PureBaseModel) -> PureBaseModel:
         """
