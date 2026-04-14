@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pytucky"
-version = "0.1.0"
+version = "1.0.0"
 description = "Lightweight single-engine Python document database - pytuck format only, no SQL, high-performance embedded storage"
 readme = "README.md"
 license = {text = "MIT"}
@@ -27,7 +27,7 @@ keywords = [
     "single-engine"
 ]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Topic :: Database",
     "Topic :: Database :: Database Engines/Servers",
