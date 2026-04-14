@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Type, Tuple, Union, Generator, ove
 from contextlib import contextmanager
 
 from ..common.typing import T
-from ..common.exceptions import QueryError, TransactionError, ValidationError
+from ..common.exceptions import QueryError, RecordNotFoundError, TransactionError, ValidationError
 from ..common.options import SyncOptions, SyncResult
 from ..query.builder import Query, BinaryExpression
 from ..query.result import Result, CursorResult
@@ -455,7 +455,7 @@ class Session:
             self._register_instance(instance)
 
             return instance
-        except Exception:
+        except (RecordNotFoundError, KeyError):
             return None
 
     def refresh(self, instance: PureBaseModel) -> None:

@@ -1799,14 +1799,14 @@ class Storage:
                     排序键函数
 
                     排序规则：
-                    - None 值在升序时排在最后，降序时排在最前
+                    - None 值始终排在最后（升序末尾，降序开头）
                     - 使用元组 (优先级, 值) 实现：优先级 0 表示有值，1 表示 None
+                    - 方向由 sort(reverse=order_desc) 控制
                     """
                     value = _record.get(order_by)
-                    # 处理 None 值：升序时 None 排在最后 (1, 0)，降序时排在最前 (0, 0)
                     if value is None:
-                        return (1, 0) if not order_desc else (0, 0)
-                    return (0, value) if not order_desc else (1, value)
+                        return (1, 0)
+                    return (0, value)
 
                 try:
                     results.sort(key=sort_key, reverse=order_desc)

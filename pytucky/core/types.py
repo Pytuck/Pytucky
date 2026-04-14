@@ -551,7 +551,7 @@ class TypeRegistry:
         Returns:
             反序列化后的 Python 值
         """
-        if value is None or value == '':
+        if value is None:
             return None
 
         deserializer = _TEXT_DESERIALIZERS.get(col_type)
