@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-import os
 import struct
 from typing import Any, BinaryIO, Dict, List, Optional, Tuple
 
@@ -234,6 +233,44 @@ class Store:
 
         for table_name in ordered_tables:
             state = self._tables[table_name]
+            overlay = state.overlay
+
+            # 未改表直通路径：跳过 O(N) decode + encode，直接读取原始字节
+            if (
+                not overlay.inserted
+                and not overlay.updated
+                and not overlay.deleted
+                and state.data_offset > 0
+            ):
+                encoded = self._passthrough_unchanged_table(state)
+                schema_blobs[table_name] = encoded.schema_blob
+                encoded_tables[table_name] = encoded
+
+                pt_meta_entries: List[ColumnIndexMeta] = []
+                pt_meta_blob = bytearray()
+                pt_data_blob = bytearray()
+                for column in state.columns:
+                    if not column.index:
+                        continue
+                    cim = state.index_meta.get(column.name)
+                    if cim is None:
+                        continue
+                    col_idx_data = self._read_bytes_at(cim.offset, cim.size)
+                    new_cim = ColumnIndexMeta(
+                        column_name=cim.column_name,
+                        offset=len(pt_data_blob),
+                        size=cim.size,
+                        entry_count=cim.entry_count,
+                        type_code=cim.type_code,
+                    )
+                    pt_meta_entries.append(new_cim)
+                    pt_meta_blob.extend(new_cim.pack())
+                    pt_data_blob.extend(col_idx_data)
+                index_meta_entries[table_name] = pt_meta_entries
+                index_meta_blobs[table_name] = bytes(pt_meta_blob)
+                index_data_blobs[table_name] = bytes(pt_data_blob)
+                continue
+
             live_records = self._materialize_records(state)
             encoded = self._encode_table(state, live_records)
             schema_blobs[table_name] = encoded.schema_blob
@@ -339,8 +376,6 @@ class Store:
                 file_obj.write(encoded.pk_dir_blob)
                 file_obj.write(index_meta_blobs[table_name])
                 file_obj.write(index_data_blobs[table_name])
-            file_obj.flush()
-            os.fsync(file_obj.fileno())
         temp_path.replace(self.file_path)
         self._refresh_tables_after_flush(refs, encoded_tables, index_meta_entries)
 
@@ -442,6 +477,31 @@ class Store:
                 continue
             live[pk] = dict(record)
         return sorted(live.items(), key=lambda item: item[0])
+
+    def _passthrough_unchanged_table(self, state: TableState) -> _EncodedTable:
+        """未改表直通：从磁盘读取原始字节，跳过 decode+encode。"""
+        data_blob = self._read_bytes_at(state.data_offset, state.data_size)
+        pk_entries = sorted(
+            [
+                PkDirEntry(
+                    pk=pk,
+                    offset=abs_offset - state.data_offset,
+                    length=length,
+                )
+                for pk, (abs_offset, length) in state.pk_index.items()
+            ],
+            key=lambda e: e.pk,
+        )
+        pk_dir_blob = b''.join(entry.pack_int() for entry in pk_entries)
+        return _EncodedTable(
+            schema_blob=self._encode_table_schema(state),
+            records=[],
+            pk_entries=pk_entries,
+            data_blob=data_blob,
+            pk_dir_blob=pk_dir_blob,
+            record_count=state.record_count,
+            next_id=state.next_id,
+        )
 
     def _read_row_at(self, state: TableState, pk: Any, offset: int, length: int) -> Dict[str, Any]:
         row_blob = self._read_bytes_at(offset, length)

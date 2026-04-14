@@ -56,7 +56,7 @@ class StorageBackend(ABC):
     def populate_tables_with_data(self, tables: Dict[str, 'Table']) -> None:
         pass
 
-    def read_lazy_record(self, file_path: Path, offset: int, columns: Dict[str, Any], pk: Any) -> Dict[str, Any]:
+    def read_lazy_record(self, file_path: Path, offset: int, columns: Dict[str, Any], pk: Any, *, table_name: Optional[str] = None) -> Dict[str, Any]:
         raise NotImplementedError
 
     @classmethod

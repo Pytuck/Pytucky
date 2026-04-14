@@ -105,6 +105,8 @@ def test_read_lazy_record_rebuilds_missing_offset_mapping(tmp_path: Path) -> Non
         backend = reopened.backend
         assert backend is not None
         offset = table._pk_offsets[1]
+        # 强制构建 offset map 以测试 fallback 路径
+        backend._rebuild_offset_map()
         backend._offset_map.pop(offset, None)
 
         record = backend.read_lazy_record(db_path, offset, table.columns, 1)

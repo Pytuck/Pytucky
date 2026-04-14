@@ -570,7 +570,7 @@ class Table:
 
         offset: int = self._pk_offsets[pk]  # type: ignore
 
-        return self._backend.read_lazy_record(self._data_file, offset, self.columns, pk)
+        return self._backend.read_lazy_record(self._data_file, offset, self.columns, pk, table_name=self.name)
 
     def has_pk(self, pk: Any) -> bool:
         """判断主键是否存在（包含懒加载未入内存的记录）"""

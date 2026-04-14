@@ -23,22 +23,20 @@ class PytuckyBackend(StorageBackend):
         # ensure suffix
         if self.file_path.suffix.lower() in {'', '.pytuck'}:
             self.file_path = self.file_path.with_suffix('.pytucky')
-        # initialize store and build offset lookup for fast lazy reads
+        # initialize store; offset map built lazily on demand
         self.store = Store(self.file_path)
-        # offset -> (table_name, pk)
-        self._offset_map: Dict[int, tuple[str, Any]] = {}
-        self._rebuild_offset_map()
+        self._offset_map: Optional[Dict[int, tuple[str, Any]]] = None
 
     def _rebuild_offset_map(self) -> None:
-        """Rebuild internal offset lookup from the current Store state.
+        """Rebuild internal offset lookup from the current Store state (lazy, on demand only).
 
         Maps each data offset to (table_name, pk) for O(1) table/record resolution by file offset.
         """
-        self._offset_map.clear()
+        omap: Dict[int, tuple[str, Any]] = {}
         for tname, state in self.store._tables.items():
             for pk, (off, length) in state.pk_index.items():
-                # prefer first-seen mapping; pk uniqueness assumed per table
-                self._offset_map[off] = (tname, pk)
+                omap[off] = (tname, pk)
+        self._offset_map = omap
 
     @classmethod
     def is_available(cls) -> bool:
@@ -326,12 +324,16 @@ class PytuckyBackend(StorageBackend):
             if table._lazy_loaded:
                 table._ensure_all_loaded()
 
-    def read_lazy_record(self, file_path: Path, offset: int, columns: Dict[str, Column], pk: Any) -> Dict[str, Any]:
-        # Use pre-built offset map to resolve table name and pk quickly. Do NOT scan all tables.
+    def read_lazy_record(self, file_path: Path, offset: int, columns: Dict[str, Column], pk: Any, *, table_name: Optional[str] = None) -> Dict[str, Any]:
         try:
+            # 快速路径：调用方已知 table_name，直接 select，跳过 offset_map
+            if table_name is not None:
+                return self.store.select(table_name, pk)
+            # 慢路径：延迟构建 offset_map 后查找
+            if self._offset_map is None:
+                self._rebuild_offset_map()
             entry = self._offset_map.get(offset)
             if entry is None:
-                # fallback: attempt a full scan as a best-effort (should be rare)
                 for tname, state in self.store._tables.items():
                     if pk in state.pk_index:
                         entry = (tname, pk)
@@ -339,15 +341,11 @@ class PytuckyBackend(StorageBackend):
                         break
             if entry is None:
                 raise KeyError(f'Offset {offset} not known')
-            table_name, resolved_pk = entry
-            self._offset_map[offset] = (table_name, resolved_pk)
-            # prefer the provided pk if consistent
+            resolved_table, resolved_pk = entry
             try:
-                rec = self.store.select(table_name, pk)
+                return self.store.select(resolved_table, pk)
             except Exception:
-                # try with resolved_pk
-                rec = self.store.select(table_name, resolved_pk)
-            return rec
+                return self.store.select(resolved_table, resolved_pk)
         except Exception as exc:
             raise SerializationError(f'V7 read lazy record failed: {exc}') from exc
 
@@ -463,8 +461,8 @@ class PytuckyBackend(StorageBackend):
         # assign rebuilt tables and flush
         self.store._tables = rebuilt_tables
         self.store.flush()
-        # rebuild offset lookup so future lazy reads use up-to-date offsets
-        self._rebuild_offset_map()
+        # invalidate offset map; will be rebuilt lazily if needed
+        self._offset_map = None
 
     def close(self) -> None:
         self.store.close()
