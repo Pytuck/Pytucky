@@ -2,7 +2,7 @@
 
 > 测试环境：Linux 6.18.7-76061807-generic / Python 3.12.3
 >
-> 数据规模：100,000 条记录
+> 数据规模：100,000 条记录（6 列：id, name, email, age, score, active）
 >
 > 日期：2026-04-14
 
@@ -19,39 +19,33 @@
 | reopen_first_query | 重开后首条主键读取 |
 | file_size | 最终文件体积 |
 
-## Pytucky 1.0.0 结果
+## Pytucky 1.0.0 vs Pytuck 1.2.1
 
-| 指标 | 结果 |
-|------|------|
-| insert | 628.03ms |
-| save | 463.71ms |
-| query_pk | 1.51ms / 100 次 |
-| query_indexed | 1.52ms / 100 次 |
-| load | 137.92ms |
-| reopen | 129.22ms |
-| reopen_first_query | 78.1μs |
-| file_size | 5.98MB |
-
-## 与 Pytuck 1.2.1 对比
-
-同机、同数据量、同 Python 版本下的对比：
+同机、同 schema、同数据量、同 Python 版本下的对比：
 
 | 指标 | Pytucky 1.0.0 | Pytuck 1.2.1 | 变化 |
 |------|---------------|--------------|------|
-| insert | 628.03ms | 808.43ms | **-22.3%** |
-| save | 463.71ms | 609.01ms | **-23.9%** |
-| query_pk | 1.51ms | 1.63ms | **-7.4%** |
-| query_indexed | 1.52ms | 1.81ms | **-16.0%** |
-| load | 137.92ms | 126.26ms | +9.2% |
-| reopen | 129.22ms | 128.92ms | +0.2% |
-| reopen_first_query | 78.1μs | 51.3μs | +52.2% |
-| file_size | 5.98MB | 9.51MB | **-37.1%** |
+| insert | 800.1ms | 780.5ms | +2.5% |
+| save | 592.3ms | 597.2ms | **-0.8%** |
+| query_pk | 1.86ms | 1.62ms | +14.5% |
+| query_indexed | 1.79ms | 1.72ms | +3.5% |
+| load | 122.6ms | 132.3ms | **-7.3%** |
+| reopen | 124.0ms | 132.1ms | **-6.1%** |
+| reopen_first_query | 89.1μs | 51.9μs | +71.6% |
+| file_size | 9.97MB | 9.97MB | 0% |
 
 **说明**：
 
-- Pytucky 在写入路径（insert / save）和文件体积上显著优于 Pytuck，这是 PTK7 格式精简的主要收益。
-- Pytuck 在 load / reopen / reopen_first_query 上略快，因其在 v1.2.1 中引入了更激进的索引元数据预加载策略。
-- 查询性能（query_pk / query_indexed）两者接近，Pytucky 略优。
+- 两个库共享 PTK7 二进制格式，相同 schema 下文件体积完全一致。
+- 写入路径（save）和读取路径（load / reopen）性能接近，Pytucky 在 load/reopen 上略优。
+- Pytuck 在点查询（query_pk / reopen_first_query）上略快，与其 v1.2.1 中更激进的索引元数据预加载有关。
+- 总体差异在噪声范围内，两者底层格式一致，性能基本持平。
+
+## 如何选择
+
+- **受限 Python 环境**（Ren'Py 等无法安装第三方依赖的场景）：选择 Pytucky，零依赖、单文件。
+- **需要多格式导出**（JSON、CSV、SQLite、Excel 等）：选择 Pytuck，支持 8 种存储引擎。
+- **只需要高性能单文件数据库**：两者均可，性能一致。
 
 ## 复现命令
 

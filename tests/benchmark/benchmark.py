@@ -21,7 +21,7 @@ from pytucky import Column, PureBaseModel, Session, Storage, declarative_base, i
 DEFAULT_RECORD_COUNT = 100
 OUTPUT_DIR = Path(__file__).parent / "benchmark_output"
 TEMP_DIR_NAME = ".tmp_bench"
-TABLE_NAME = "users"
+TABLE_NAME = "benchmark_users"
 
 
 class Timer:
@@ -55,14 +55,17 @@ class PytuckyBenchmark:
         db = Storage(file_path=self.file_path)
         Base: Type[PureBaseModel] = declarative_base(db)
 
-        class User(Base):
+        class BenchmarkUser(Base):
             __tablename__ = TABLE_NAME
             id = Column(int, primary_key=True)
             name = Column(str, nullable=False, index=True)
-            value = Column(int, nullable=True)
+            email = Column(str, nullable=True)
+            age = Column(int, nullable=True)
+            score = Column(float, nullable=True)
+            active = Column(bool, nullable=True)
 
         session = Session(db)
-        return db, session, User
+        return db, session, BenchmarkUser
 
     def _cleanup_storage_files(self) -> None:
         journal_path = self.file_path.with_name(".%s.journal" % self.file_path.name)
@@ -79,7 +82,13 @@ class PytuckyBenchmark:
     def bench_insert(self, session: Session, model_class: Type[PureBaseModel], count: int) -> float:
         with Timer() as timer:
             for index in range(count):
-                statement = insert(model_class).values(name="u%d" % index, value=index)
+                statement = insert(model_class).values(
+                    name="User_%d" % index,
+                    email="user%d@example.com" % index,
+                    age=20 + (index % 50),
+                    score=float(index % 100) / 10.0,
+                    active=(index % 2 == 0),
+                )
                 session.execute(statement)
             session.commit()
         return timer.elapsed
@@ -129,7 +138,7 @@ class PytuckyBenchmark:
         lookups = min(100, count)
         with Timer() as timer:
             for index in range(lookups):
-                statement = select(model_class).filter_by(name="u%d" % index)
+                statement = select(model_class).filter_by(name="User_%d" % index)
                 result = session.execute(statement)
                 _ = result.first()
         return timer.elapsed

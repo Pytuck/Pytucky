@@ -114,19 +114,19 @@ finally:
 
 ## 性能（100,000 条记录）
 
-与 Pytuck 1.2.1 同机对比（Linux / Python 3.12.3）：
+与 Pytuck 1.2.1 同机、同 schema 对比（Linux / Python 3.12.3）：
 
 | 指标 | Pytucky 1.0.0 | Pytuck 1.2.1 | 变化 |
 |------|---------------|--------------|------|
-| insert | 628.03ms | 808.43ms | **-22%** |
-| save | 463.71ms | 609.01ms | **-24%** |
-| query_pk (×100) | 1.51ms | 1.63ms | **-7%** |
-| query_indexed (×100) | 1.52ms | 1.81ms | **-16%** |
-| load | 137.92ms | 126.26ms | +9% |
-| reopen | 129.22ms | 128.92ms | ≈ |
-| file_size | 5.98MB | 9.51MB | **-37%** |
+| insert | 800.1ms | 780.5ms | +2.5% |
+| save | 592.3ms | 597.2ms | -0.8% |
+| query_pk (×100) | 1.86ms | 1.62ms | +14.5% |
+| query_indexed (×100) | 1.79ms | 1.72ms | +3.5% |
+| load | 122.6ms | 132.3ms | **-7.3%** |
+| reopen | 124.0ms | 132.1ms | **-6.1%** |
+| file_size | 9.97MB | 9.97MB | 0% |
 
-详见 [docs/guide/benchmark.md](docs/guide/benchmark.md)。
+两个库共享 PTK7 格式，性能基本持平。详见 [docs/guide/benchmark.md](docs/guide/benchmark.md)。
 
 ## 文档
 

@@ -14,14 +14,17 @@
 
 ### 性能
 
-与 Pytuck 1.2.1 同机对比（100,000 条记录）：
+与 Pytuck 1.2.1 同机、同 schema 对比（100,000 条记录）：
 
 | 指标 | Pytucky 1.0.0 | Pytuck 1.2.1 | 变化 |
 |------|---------------|--------------|------|
-| insert | 628ms | 808ms | **-22%** |
-| save | 464ms | 609ms | **-24%** |
-| query_indexed | 1.52ms | 1.81ms | **-16%** |
-| file_size | 5.98MB | 9.51MB | **-37%** |
+| insert | 800ms | 781ms | +2.5% |
+| save | 592ms | 597ms | -0.8% |
+| query_indexed | 1.79ms | 1.72ms | +3.5% |
+| load | 123ms | 132ms | **-7.3%** |
+| file_size | 9.97MB | 9.97MB | 0% |
+
+两个库共享 PTK7 格式，相同 schema 下文件体积一致，性能基本持平。
 
 具体优化项：
 
@@ -29,10 +32,10 @@
 - **增量 flush**：只写入有变更的表，未改动的表跳过物化
 - **复用读句柄**：同一 Store 实例内复用文件句柄
 - **Session 批量插入**：`flush()` 按模型类分组走 `bulk_insert`，替代逐条 `insert` + readback
-- **add O(1) 去重**：`session.add()` 使用 id-based set 替代列表扫描，100k add_all 从 74s 降至 1s
+- **add O(1) 去重**：`session.add()` 使用 id-based set 替代列表扫描
 - **materialize 批量读取**：单次 `_read_bytes_at()` + 内存切片替代逐行 seek+read
 - **decode_row codecs 缓存**：避免每行每列重复查找编解码器
-- **P1 优化**：移除 fsync、未改表字节直通、消除 `_offset_map` 冗余字典
+- **其他**：移除 fsync、未改表字节直通、消除 `_offset_map` 冗余字典
 
 ### PTK7 格式
 
