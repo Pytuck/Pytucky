@@ -2,13 +2,20 @@
 Pytucky 后端配置选项
 """
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
+from typing_extensions import Literal
 
 
 @dataclass
 class BinaryBackendOptions:
-    """PTK7 二进制后端配置选项"""
-    pass
+    """PTK7 二进制后端配置选项
+
+    恢复 encryption/password 字段以兼容旧的 PTK7 加密配置。
+    - encryption: 可选的级别标识，允许 'low'|'medium'|'high' 或 None
+    - password: 可选的原始密码字符串，用于派生密钥（空表示未配置）
+    """
+    encryption: Optional["Literal['low','medium','high']"] = None
+    password: Optional[str] = None
 
 
 # 保留 BackendOptions 名称作为别名

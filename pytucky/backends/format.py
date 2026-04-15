@@ -19,6 +19,11 @@ NULL_BITMAP_STRUCT = struct.Struct("<I")
 
 @dataclass(frozen=True)
 class FileHeader:
+    # Align with pytuck FileHeaderV7 flag layout
+    FLAG_ENCRYPTION_ENABLED = 0x02
+    FLAG_ENCRYPTION_LEVEL_MASK = 0x0C
+    FLAG_ENCRYPTION_LEVEL_SHIFT = 2
+
     magic: bytes = MAGIC_V7
     version: int = 7
     flags: int = 0
@@ -59,6 +64,73 @@ class FileHeader:
         if header.version != 7:
             raise SerializationError(f"Unsupported PTK7 version: {header.version}")
         return header
+
+    def is_encrypted(self) -> bool:
+        return (self.flags & self.FLAG_ENCRYPTION_ENABLED) != 0
+
+    def get_encryption_level(self) -> Optional[str]:
+        if not self.is_encrypted():
+            return None
+        level_code = (self.flags & self.FLAG_ENCRYPTION_LEVEL_MASK) >> self.FLAG_ENCRYPTION_LEVEL_SHIFT
+        # map codes to names consistent with common.crypto expectations
+        if level_code == 1:
+            return 'low'
+        if level_code == 2:
+            return 'medium'
+        if level_code == 3:
+            return 'high'
+        return None
+
+    def set_encryption(self, level: Optional[str]) -> "FileHeader":
+        # Accept None to clear encryption (convenience for tests)
+        flags = self.flags & ~self.FLAG_ENCRYPTION_LEVEL_MASK
+        if level is None:
+            # clear enabled bit and level bits
+            new_flags = flags & ~self.FLAG_ENCRYPTION_ENABLED
+        else:
+            level_map = {'low': 1, 'medium': 2, 'high': 3}
+            if level not in level_map:
+                raise SerializationError(f"Unknown encryption level: {level}")
+            level_code = level_map[level]
+            new_flags = flags | self.FLAG_ENCRYPTION_ENABLED | (level_code << self.FLAG_ENCRYPTION_LEVEL_SHIFT)
+        return type(self)(
+            magic=self.magic,
+            version=self.version,
+            flags=new_flags,
+            table_count=self.table_count,
+            schema_offset=self.schema_offset,
+            schema_size=self.schema_size,
+            table_ref_offset=self.table_ref_offset,
+            table_ref_size=self.table_ref_size,
+            file_size=self.file_size,
+            checksum=self.checksum,
+            reserved=self.reserved,
+        )
+
+
+# 加密元数据结构：16 bytes salt + 4 bytes key_check == 20 bytes total
+CRYPTO_META_STRUCT = struct.Struct("<16s4s")
+
+
+@dataclass(frozen=True)
+class CryptoMetadataV7:
+    salt: bytes = b"\x00" * 16
+    key_check: bytes = b"\x00" * 4
+
+    def pack(self) -> bytes:
+        return CRYPTO_META_STRUCT.pack(
+            self.salt[:16].ljust(16, b"\x00"),
+            self.key_check[:4].ljust(4, b"\x00"),
+        )
+
+    @classmethod
+    def unpack(cls, data: bytes) -> "CryptoMetadataV7":
+        if len(data) < CRYPTO_META_STRUCT.size:
+            raise SerializationError(
+                f"Not enough data to decode CryptoMetadataV7 (need {CRYPTO_META_STRUCT.size}, got {len(data)})"
+            )
+        salt, key_check = CRYPTO_META_STRUCT.unpack(data[: CRYPTO_META_STRUCT.size])
+        return cls(salt=salt, key_check=key_check)
 
 
 @dataclass(frozen=True)

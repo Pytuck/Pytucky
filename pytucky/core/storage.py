@@ -1084,6 +1084,8 @@ class Storage:
 
             from ..backends.backend_pytucky import PytuckyBackend
             self.backend = PytuckyBackend(self.file_path, backend_options)
+            # ensure Storage.file_path reflects any normalization performed by backend
+            self.file_path = self.backend.file_path
 
             # 如果文件存在，自动加载
             if self.backend.exists():

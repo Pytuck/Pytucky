@@ -7,6 +7,7 @@ from ..core.orm import Column
 from ..common.options import BackendOptions, BinaryBackendOptions
 from ..common.exceptions import SerializationError
 from .base import StorageBackend
+from .format import FileHeader, HEADER_STRUCT
 
 
 class PytuckyBackend(StorageBackend):
@@ -20,11 +21,12 @@ class PytuckyBackend(StorageBackend):
 
     def __init__(self, file_path: Path, options: Optional[BackendOptions] = None):
         super().__init__(file_path, options or BinaryBackendOptions())
-        # ensure suffix
-        if self.file_path.suffix.lower() in {'', '.pytuck'}:
-            self.file_path = self.file_path.with_suffix('.pytucky')
+        # ensure suffix: only when no suffix provided, default to .pytuck
+        if self.file_path.suffix == '':
+            self.file_path = self.file_path.with_suffix('.pytuck')
         # initialize store; offset map built lazily on demand
-        self.store = Store(self.file_path)
+        # pass backend options through to Store so encryption/password etc. are honored
+        self.store = Store(self.file_path, self.options)
         self._offset_map: Optional[Dict[int, tuple[str, Any]]] = None
 
     def _rebuild_offset_map(self) -> None:
@@ -59,14 +61,22 @@ class PytuckyBackend(StorageBackend):
         """Probe whether given file_path is a PTK7 store.
 
         Returns (True, info) on match, (False, None) otherwise.
+        This probe only reads the file header and does not attempt to fully open
+        the Store, so it works for encrypted files without providing passwords.
         """
         try:
             path = Path(file_path).expanduser()
-            if not path.exists() or not path.is_file() or path.stat().st_size < 64:
+            if not path.exists() or not path.is_file() or path.stat().st_size < HEADER_STRUCT.size:
                 return False, None
-            # Do not raise on init; Store will attempt to open and validate header
-            Store(path)
-            return True, {"engine": PytuckyBackend.ENGINE_NAME, "version": 7}
+            with path.open('rb') as handle:
+                hdr_bytes = handle.read(HEADER_STRUCT.size)
+                if len(hdr_bytes) < HEADER_STRUCT.size:
+                    return False, None
+                try:
+                    FileHeader.unpack(hdr_bytes)
+                    return True, {"engine": PytuckyBackend.ENGINE_NAME, "version": 7}
+                except Exception:
+                    return False, None
         except Exception:
             return False, None
 
@@ -114,7 +124,7 @@ class PytuckyBackend(StorageBackend):
                     state = self._store.table_state(self._table)
                     cim = state.index_meta.get(self.column_name)
                     if cim is not None:
-                        blob = self._store._read_bytes_at(cim.offset, cim.size)
+                        blob = self._store._read_region(cim.offset, cim.size)
                         from . import index as idx_mod
                         pairs = idx_mod.decode_sorted_pairs(blob, self._column)
                         for val, pk in pairs:
@@ -197,7 +207,7 @@ class PytuckyBackend(StorageBackend):
                     state = self._store.table_state(self._table)
                     cim = state.index_meta.get(self.column_name)
                     if cim is not None:
-                        blob = self._store._read_bytes_at(cim.offset, cim.size)
+                        blob = self._store._read_region(cim.offset, cim.size)
                         from . import index as idx_mod
                         pairs = idx_mod.decode_sorted_pairs(blob, self._column)
                         for val, pk in pairs:
@@ -266,7 +276,7 @@ class PytuckyBackend(StorageBackend):
                     cim = state.index_meta.get(self.column_name)
                     result = set()
                     if cim is not None:
-                        blob = self._store._read_bytes_at(cim.offset, cim.size)
+                        blob = self._store._read_region(cim.offset, cim.size)
                         from ..backends import index
                         pks = index.range_search_sorted_pairs(blob, self._column, min_val, max_val, include_min, include_max)
                         result.update(pks)
@@ -357,9 +367,21 @@ class PytuckyBackend(StorageBackend):
         # capture previous on-disk states to allow reusing unchanged tables without materializing
         prev_states: Dict[str, TableState] = {k: v for k, v in getattr(self.store, '_tables', {}).items()}
         # close current store to prepare writing new file
+        # preserve loaded encryption level so that reopening with only a password
+        # can keep writing back the same encryption level
+        prev_loaded_encryption = getattr(self.store, '_loaded_encryption_level', None)
         self.store.close()
         # create a fresh store object representing the new on-disk layout
-        self.store = Store(self.file_path, open_existing=False)
+        # ensure backend options are passed through when recreating Store
+        self.store = Store(self.file_path, self.options, open_existing=False)
+        # restore loaded encryption level into the fresh Store instance so flush() can
+        # pick it up when backend_options.encryption is not explicitly set
+        # Only restore previous loaded encryption level when caller did not explicitly
+        # set an encryption level in backend options. If backend options specify
+        # encryption (including None explicitly), prefer that value and do not
+        # overwrite the newly created Store's state.
+        if prev_loaded_encryption is not None and getattr(self.options, 'encryption', None) is None:
+            self.store._loaded_encryption_level = prev_loaded_encryption
         rebuilt_tables: Dict[str, TableState] = {}
 
         for name, table in tables.items():
