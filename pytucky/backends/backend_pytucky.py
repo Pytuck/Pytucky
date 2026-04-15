@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 from ..backends.store import Store, TableState, TableOverlay
 from ..core.storage import Table
 from ..core.orm import Column
-from ..common.options import BackendOptions, BinaryBackendOptions
+from ..common.options import PytuckBackendOptions
 from ..common.exceptions import SerializationError
 from .base import StorageBackend
 from .format import FileHeader, HEADER_STRUCT
@@ -19,8 +19,8 @@ class PytuckyBackend(StorageBackend):
 
     ENGINE_NAME = 'pytucky'
 
-    def __init__(self, file_path: Path, options: Optional[BackendOptions] = None):
-        super().__init__(file_path, options or BinaryBackendOptions())
+    def __init__(self, file_path: Path, options: Optional[PytuckBackendOptions] = None):
+        super().__init__(file_path, options or PytuckBackendOptions())
         # ensure suffix: only when no suffix provided, default to .pytuck
         if self.file_path.suffix == '':
             self.file_path = self.file_path.with_suffix('.pytuck')

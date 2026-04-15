@@ -32,7 +32,7 @@ from ..common.crypto import (
     get_cipher,
     ENCRYPTION_LEVELS,
 )
-from ..common.options import BinaryBackendOptions
+from ..common.options import PytuckBackendOptions
 
 
 
@@ -80,9 +80,9 @@ class _EncodedTable:
 
 
 class Store:
-    def __init__(self, file_path: Path | str, options: Optional[BinaryBackendOptions] = None, *, open_existing: bool = True) -> None:
+    def __init__(self, file_path: Path | str, options: Optional[PytuckBackendOptions] = None, *, open_existing: bool = True) -> None:
         self.file_path = Path(file_path)
-        self.options = options or BinaryBackendOptions()
+        self.options = options or PytuckBackendOptions()
         self._tables: Dict[str, TableState] = {}
         self._reader: Optional[BinaryIO] = None
         self._cipher = None

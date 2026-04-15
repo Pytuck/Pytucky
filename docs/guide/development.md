@@ -148,7 +148,7 @@ pytucky/
 │       ├── base.py           # StorageBackend 基类
 │       ├── backend_pytucky.py # PTK7 引擎实现
 │       ├── store.py          # PTK7 底层存储
-│       ├── format.py         # PTK7 二进制格式
+│       ├── format.py         # PTK7 格式
 │       └── index.py          # PTK7 索引编解码
 ├── tests/                    # 测试
 ├── docs/                     # 文档

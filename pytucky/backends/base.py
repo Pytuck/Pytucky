@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, Any, Optional, Set, Union, TYPE_CHECKING, Tuple
 
-from ..common.options import BackendOptions
+from ..common.options import PytuckBackendOptions
 
 if TYPE_CHECKING:
     from ..core.storage import Table
@@ -23,7 +23,7 @@ class StorageBackend(ABC):
 
     ENGINE_NAME: str  # type: ignore
 
-    def __init__(self, file_path: Union[str, Path], options: BackendOptions):
+    def __init__(self, file_path: Union[str, Path], options: PytuckBackendOptions):
         self.file_path: Path = Path(file_path).expanduser()
         self.options = options
 

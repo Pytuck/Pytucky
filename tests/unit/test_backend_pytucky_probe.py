@@ -4,25 +4,25 @@ import pytest
 
 from pytucky import Column, Storage
 from pytucky.backends.backend_pytucky import PytuckyBackend
-from pytucky.common.options import BinaryBackendOptions
+from pytucky.common.options import PytuckBackendOptions
 
 pytestmark = pytest.mark.unit
 
 
 def test_backend_defaults_empty_suffix_to_pytuck(tmp_path: Path) -> None:
-    backend = PytuckyBackend(tmp_path / "users", BinaryBackendOptions())
+    backend = PytuckyBackend(tmp_path / "users", PytuckBackendOptions())
 
     assert backend.file_path.suffix == ".pytuck"
 
 
 def test_backend_preserves_explicit_pytuck_suffix(tmp_path: Path) -> None:
-    backend = PytuckyBackend(tmp_path / "users.pytuck", BinaryBackendOptions())
+    backend = PytuckyBackend(tmp_path / "users.pytuck", PytuckBackendOptions())
 
     assert backend.file_path.suffix == ".pytuck"
 
 
 def test_backend_preserves_explicit_pytucky_suffix(tmp_path: Path) -> None:
-    backend = PytuckyBackend(tmp_path / "users.pytucky", BinaryBackendOptions())
+    backend = PytuckyBackend(tmp_path / "users.pytucky", PytuckBackendOptions())
 
     assert backend.file_path.suffix == ".pytucky"
 
@@ -48,7 +48,7 @@ def test_probe_accepts_encrypted_ptk7_file_without_password(tmp_path: Path) -> N
     db_path = tmp_path / "encrypted-probe.pytuck"
     db = Storage(
         file_path=db_path,
-        backend_options=BinaryBackendOptions(encryption="high", password="secret123"),
+        backend_options=PytuckBackendOptions(encryption="high", password="secret123"),
     )
     try:
         db.create_table("users", [Column(int, name="id", primary_key=True), Column(str, name="name")])

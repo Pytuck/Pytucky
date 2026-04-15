@@ -1,5 +1,5 @@
 """
-pytucky.backends — PTK7 单文件二进制引擎
+pytucky.backends — PTK7 单文件存储引擎
 """
 
 from .base import StorageBackend

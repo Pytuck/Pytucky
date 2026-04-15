@@ -63,4 +63,4 @@ from pytucky import (
 
 - Python 要求：>= 3.7
 - 运行时依赖：无
-- 数据格式：PTK7（`.pytucky` 文件）
+- 数据格式：PTK7（默认 `.pytuck`，显式 `.pytucky` 兼容）

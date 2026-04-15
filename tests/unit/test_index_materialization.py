@@ -44,9 +44,9 @@ def test_hash_index_proxy_decodes_once_on_repeated_lookup(
 
     # 通过 PytuckyBackend.load() 重建 proxy
     from pytucky.backends.backend_pytucky import PytuckyBackend
-    from pytucky.common.options import BinaryBackendOptions
+    from pytucky.common.options import PytuckBackendOptions
 
-    backend = PytuckyBackend(file_path, BinaryBackendOptions())
+    backend = PytuckyBackend(file_path, PytuckBackendOptions())
     tables = backend.load()
     table = tables["users"]
     name_index = table.indexes.get("name")
@@ -85,9 +85,9 @@ def test_sorted_index_proxy_decodes_once_on_repeated_lookup(
     _build_store_with_data(file_path, n=100)
 
     from pytucky.backends.backend_pytucky import PytuckyBackend
-    from pytucky.common.options import BinaryBackendOptions
+    from pytucky.common.options import PytuckBackendOptions
 
-    backend = PytuckyBackend(file_path, BinaryBackendOptions())
+    backend = PytuckyBackend(file_path, PytuckBackendOptions())
     tables = backend.load()
     table = tables["users"]
     age_index = table.indexes.get("age")
@@ -124,9 +124,9 @@ def test_proxy_insert_before_materialize_visible_after_lookup(
     _build_store_with_data(file_path, n=10)
 
     from pytucky.backends.backend_pytucky import PytuckyBackend
-    from pytucky.common.options import BinaryBackendOptions
+    from pytucky.common.options import PytuckBackendOptions
 
-    backend = PytuckyBackend(file_path, BinaryBackendOptions())
+    backend = PytuckyBackend(file_path, PytuckBackendOptions())
     tables = backend.load()
     table = tables["users"]
     name_index = table.indexes["name"]
@@ -147,9 +147,9 @@ def test_proxy_remove_before_materialize_respected(
     _build_store_with_data(file_path, n=10)
 
     from pytucky.backends.backend_pytucky import PytuckyBackend
-    from pytucky.common.options import BinaryBackendOptions
+    from pytucky.common.options import PytuckBackendOptions
 
-    backend = PytuckyBackend(file_path, BinaryBackendOptions())
+    backend = PytuckyBackend(file_path, PytuckBackendOptions())
     tables = backend.load()
     table = tables["users"]
     name_index = table.indexes["name"]
@@ -175,9 +175,9 @@ def test_materialize_does_not_break_subsequent_store_search(
     _build_store_with_data(file_path, n=100)
 
     from pytucky.backends.backend_pytucky import PytuckyBackend
-    from pytucky.common.options import BinaryBackendOptions
+    from pytucky.common.options import PytuckBackendOptions
 
-    backend = PytuckyBackend(file_path, BinaryBackendOptions())
+    backend = PytuckyBackend(file_path, PytuckBackendOptions())
     tables = backend.load()
     table = tables["users"]
     age_index = table.indexes["age"]

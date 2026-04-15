@@ -13,6 +13,7 @@ Storage(
     file_path: str | Path | None = None,
     in_memory: bool = False,
     auto_flush: bool = False,
+    backend_options: PytuckBackendOptions | None = None,
 )
 ```
 
@@ -21,21 +22,32 @@ Storage(
 | `file_path` | 数据文件路径（None 表示纯内存） |
 | `in_memory` | 是否纯内存模式 |
 | `auto_flush` | 每次写操作后是否自动刷盘 |
+| `backend_options` | PTK7 后端配置对象，使用 `PytuckBackendOptions` 指定加密参数 |
 
 ### 示例
 
 ```python
 # 文件模式
-db = Storage(file_path='mydb.pytucky')
+db = Storage(file_path='mydb.pytuck')
 
 # 纯内存
 db = Storage(in_memory=True)
 
 # 自动刷盘
-db = Storage(file_path='mydb.pytucky', auto_flush=True)
+db = Storage(file_path='mydb.pytuck', auto_flush=True)
+
+# 加密配置
+from pytucky.common.options import PytuckBackendOptions
+
+db = Storage(
+    file_path='secure.pytuck',
+    backend_options=PytuckBackendOptions(encryption='high', password='secret123'),
+)
 ```
 
 如果 `file_path` 指向已存在的文件，构造时自动加载数据。
+
+PTK7 文件默认后缀为 `.pytuck`；项目包名虽然是 `pytucky`，但如果显式传入 `.pytucky` 文件名也仍然兼容。
 
 ---
 

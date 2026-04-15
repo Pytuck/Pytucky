@@ -7,24 +7,15 @@ from typing_extensions import Literal
 
 
 @dataclass
-class BinaryBackendOptions:
-    """PTK7 二进制后端配置选项
+class PytuckBackendOptions:
+    """PTK7 后端配置选项
 
-    恢复 encryption/password 字段以兼容旧的 PTK7 加密配置。
+    承载 PTK7 读写所需的加密配置。
     - encryption: 可选的级别标识，允许 'low'|'medium'|'high' 或 None
     - password: 可选的原始密码字符串，用于派生密钥（空表示未配置）
     """
     encryption: Optional["Literal['low','medium','high']"] = None
     password: Optional[str] = None
-
-
-# 保留 BackendOptions 名称作为别名
-BackendOptions = BinaryBackendOptions
-
-
-def get_default_backend_options(engine: str) -> BinaryBackendOptions:
-    """返回默认后端选项。"""
-    return BinaryBackendOptions()
 
 
 # ========== Schema 同步选项 ==========

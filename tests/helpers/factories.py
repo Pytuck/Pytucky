@@ -1,13 +1,13 @@
 from pathlib import Path
 from typing import Iterable, Dict, Any
 from pytucky import Column, Storage
-from pytucky.common.options import BinaryBackendOptions
+from pytucky.common.options import PytuckBackendOptions
 
 
 def build_user_storage(file_path: Path, *, lazy_load: bool = True) -> Storage:
     storage = Storage(
         file_path=file_path,
-        backend_options=BinaryBackendOptions(),
+        backend_options=PytuckBackendOptions(),
     )
     storage.create_table(
         "users",

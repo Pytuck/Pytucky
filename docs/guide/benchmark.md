@@ -36,7 +36,7 @@
 
 **说明**：
 
-- 两个库共享 PTK7 二进制格式，相同 schema 下文件体积完全一致。
+- 两个库共享 PTK7 格式，相同 schema 下文件体积完全一致。
 - 写入路径（save）和读取路径（load / reopen）性能接近，Pytucky 在 load/reopen 上略优。
 - Pytuck 在点查询（query_pk / reopen_first_query）上略快，与其 v1.2.1 中更激进的索引元数据预加载有关。
 - 总体差异在噪声范围内，两者底层格式一致，性能基本持平。

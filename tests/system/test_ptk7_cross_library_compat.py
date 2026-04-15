@@ -18,10 +18,10 @@ def test_pytucky_write_then_pytuck_rewrite_then_pytucky_read(tmp_path: Path, lev
     syms = load_pytuck_symbols()
     PytuckStorage = syms['Storage']
     PytuckColumn = syms['Column']
-    PytuckBinaryBackendOptions = syms['BinaryBackendOptions']
+    PytuckBackendOptions = syms['PytuckBackendOptions']
     PytuckyStorage = syms['PytuckyStorage']
     PytuckyColumn = syms['PytuckyColumn']
-    PytuckyBinaryBackendOptions = syms['PytuckyBinaryBackendOptions']
+    PytuckyBackendOptions = syms['PytuckyBackendOptions']
 
     file_path = tmp_path / f'db_ptk7_{level or "none"}.pytuck'
 
@@ -29,7 +29,7 @@ def test_pytucky_write_then_pytuck_rewrite_then_pytucky_read(tmp_path: Path, lev
     if opts is None:
         py_opts = None
     else:
-        py_opts = PytuckyBinaryBackendOptions(encryption=opts['encryption'], password=opts['password'])
+        py_opts = PytuckyBackendOptions(encryption=opts['encryption'], password=opts['password'])
 
     # create with pytucky
     db1 = PytuckyStorage(file_path=str(file_path), backend_options=py_opts)
@@ -42,7 +42,7 @@ def test_pytucky_write_then_pytuck_rewrite_then_pytucky_read(tmp_path: Path, lev
     if opts is None:
         pytuck_opts = None
     else:
-        pytuck_opts = PytuckBinaryBackendOptions(encryption=opts['encryption'], password=opts['password'])
+        pytuck_opts = PytuckBackendOptions(encryption=opts['encryption'], password=opts['password'])
     db2 = PytuckStorage(file_path=str(file_path), engine='pytuck', backend_options=pytuck_opts)
     # use simple Storage API
     rows = []
@@ -70,10 +70,10 @@ def test_pytuck_write_then_pytucky_rewrite_then_pytuck_read(tmp_path: Path, leve
     syms = load_pytuck_symbols()
     PytuckStorage = syms['Storage']
     PytuckColumn = syms['Column']
-    PytuckBinaryBackendOptions = syms['BinaryBackendOptions']
+    PytuckBackendOptions = syms['PytuckBackendOptions']
     PytuckyStorage = syms['PytuckyStorage']
     PytuckyColumn = syms['PytuckyColumn']
-    PytuckyBinaryBackendOptions = syms['PytuckyBinaryBackendOptions']
+    PytuckyBackendOptions = syms['PytuckyBackendOptions']
 
     file_path = tmp_path / f'db_ptk7_rev_{level or "none"}.pytuck'
 
@@ -81,7 +81,7 @@ def test_pytuck_write_then_pytucky_rewrite_then_pytuck_read(tmp_path: Path, leve
     if opts is None:
         pytuck_opts = None
     else:
-        pytuck_opts = PytuckBinaryBackendOptions(encryption=opts['encryption'], password=opts['password'])
+        pytuck_opts = PytuckBackendOptions(encryption=opts['encryption'], password=opts['password'])
 
     db1 = PytuckStorage(file_path=str(file_path), engine='pytuck', backend_options=pytuck_opts)
     db1.create_table('users', [PytuckColumn(int, name='id', primary_key=True), PytuckColumn(str, name='name')])
@@ -93,7 +93,7 @@ def test_pytuck_write_then_pytucky_rewrite_then_pytuck_read(tmp_path: Path, leve
     if opts is None:
         py_opts = None
     else:
-        py_opts = PytuckyBinaryBackendOptions(encryption=opts['encryption'], password=opts['password'])
+        py_opts = PytuckyBackendOptions(encryption=opts['encryption'], password=opts['password'])
     db2 = PytuckyStorage(file_path=str(file_path), backend_options=py_opts)
     r = db2.select('users', 1)
     assert r['name'] == 'alice'

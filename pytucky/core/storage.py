@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Iterator, Tuple, Optional, Generator, Type, Union, TYPE_CHECKING, Sequence
 from contextlib import contextmanager
 
-from ..common.options import BackendOptions, SyncOptions, SyncResult
+from ..common.options import PytuckBackendOptions, SyncOptions, SyncResult
 from .orm import Column, PSEUDO_PK_NAME
 from .index import BaseIndex, HashIndex, SortedIndex
 from .event import event
@@ -133,7 +133,7 @@ class Table:
         # 懒加载支持
         self._pk_offsets: Optional[Dict[Any, int]] = None  # {pk: file_offset}
         self._data_file: Optional[Path] = None  # 数据文件路径
-        self._backend: Optional[Any] = None  # Binary 后端引用（用于读取记录）
+        self._backend: Optional[Any] = None  # PTK7 后端引用（用于读取记录）
         self._lazy_loaded: bool = False  # 是否为懒加载模式
 
         # 在 runtime 维护显式的 dirty PK 集合（用于 PTK7 lazy fast-path）
@@ -1042,19 +1042,17 @@ class Storage:
         self,
         file_path: Optional[Union[str, Path]] = None,
         in_memory: bool = False,
-        engine: str = 'pytuck',
         auto_flush: bool = False,
-        backend_options: Optional[BackendOptions] = None,
+        backend_options: Optional[PytuckBackendOptions] = None,
     ):
         """
         初始化存储引擎
 
         Args:
-            file_path: 数据文件路径，支持字符串或 Path 对象（None表示纯内存）
+            file_path: 数据文件路径，支持字符串或 Path 对象（None 表示纯内存）
             in_memory: 是否纯内存模式
-            engine: 后端引擎名称（'pytuck', 'json', 'jsonl', 'csv', 'sqlite', 'duckdb', 'excel', 'xml'）
             auto_flush: 是否自动刷新到磁盘
-            backend_options: 强类型的后端配置选项对象（JsonBackendOptions, CsvBackendOptions等）
+            backend_options: PTK7 后端配置对象，通常使用 PytuckBackendOptions 传递 encryption/password 等参数
         """
         # 路径统一处理：边界转换为 Path 对象
         if file_path is not None and str(file_path) != '':
@@ -1062,7 +1060,6 @@ class Storage:
         else:
             self.file_path = None
         self.in_memory: bool = in_memory or (file_path is None)
-        self.engine_name = 'pytucky'
         self.auto_flush = auto_flush
         self.tables: Dict[str, Table] = {}
         self._dirty = False
@@ -1079,8 +1076,7 @@ class Storage:
         self.backend: Optional[StorageBackend] = None
         if not self.in_memory and self.file_path:
             if backend_options is None:
-                from ..common.options import BinaryBackendOptions
-                backend_options = BinaryBackendOptions()
+                backend_options = PytuckBackendOptions()
 
             from ..backends.backend_pytucky import PytuckyBackend
             self.backend = PytuckyBackend(self.file_path, backend_options)

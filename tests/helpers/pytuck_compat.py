@@ -1,8 +1,10 @@
+from dataclasses import is_dataclass
 from pathlib import Path
-import sys
+import importlib
 import importlib.util
-import json
-from typing import Dict, Any
+import inspect
+import sys
+from typing import Any, Dict, Type
 
 
 def _locate_repo_root(start: Path) -> Path:
@@ -14,10 +16,40 @@ def _locate_repo_root(start: Path) -> Path:
     raise AssertionError("Cannot locate pytucky repo root (pyproject.toml not found in ancestors)")
 
 
+def _resolve_backend_options_type(options_module: Any) -> Type[Any]:
+    candidates = []
+    for attr in dir(options_module):
+        value = getattr(options_module, attr)
+        if not inspect.isclass(value):
+            continue
+        if not attr.endswith('Options') or 'Backend' not in attr:
+            continue
+        if not is_dataclass(value):
+            continue
+        field_names = set(getattr(value, '__dataclass_fields__', {}).keys())
+        if {'encryption', 'password'}.issubset(field_names):
+            candidates.append(value)
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    preferred = [candidate for candidate in candidates if candidate.__name__.startswith('Pytuck')]
+    if len(preferred) == 1:
+        return preferred[0]
+
+    if not candidates:
+        raise AttributeError('Cannot resolve backend options type from pytuck.common.options')
+
+    raise AttributeError(
+        'Ambiguous backend options types in pytuck.common.options: '
+        + ', '.join(candidate.__name__ for candidate in candidates)
+    )
+
+
 def load_pytuck_symbols(repo_root: Path | None = None) -> Dict[str, Any]:
     """Load symbols from a sibling pytuck repository.
 
-    Returns a dict with keys: Storage, Column, BinaryBackendOptions, and local pytucky Storage/Column/Options as well.
+    Returns a dict with keys: Storage, Column, PytuckBackendOptions, and local pytucky Storage/Column/Options as well.
     Raises AssertionError with a clear message when sibling repo is missing or import fails.
     """
     start = Path(__file__) if repo_root is None else Path(repo_root)
@@ -54,7 +86,8 @@ def load_pytuck_symbols(repo_root: Path | None = None) -> Dict[str, Any]:
     try:
         PytuckStorage = real_pytuck.Storage
         PytuckColumn = real_pytuck.Column
-        from pytuck.common.options import BinaryBackendOptions as PytuckBinaryBackendOptions  # type: ignore
+        options_module = importlib.import_module('pytuck.common.options')
+        PytuckBackendOptions = _resolve_backend_options_type(options_module)
     except Exception as e:
         raise AssertionError(f"Imported pytuck but expected attributes missing: {e}")
 
@@ -63,16 +96,16 @@ def load_pytuck_symbols(repo_root: Path | None = None) -> Dict[str, Any]:
         import pytucky as local_pytucky  # type: ignore
         PytuckyStorage = local_pytucky.Storage
         PytuckyColumn = local_pytucky.Column
-        from pytucky.common.options import BinaryBackendOptions as PytuckyBinaryBackendOptions  # type: ignore
+        from pytucky.common.options import PytuckBackendOptions as LocalPytuckBackendOptions  # type: ignore
     except Exception as e:
         raise AssertionError(f"Failed to import local pytucky symbols: {e}")
 
     return {
         'Storage': PytuckStorage,
         'Column': PytuckColumn,
-        'BinaryBackendOptions': PytuckBinaryBackendOptions,
+        'PytuckBackendOptions': PytuckBackendOptions,
         'PytuckyStorage': PytuckyStorage,
         'PytuckyColumn': PytuckyColumn,
-        'PytuckyBinaryBackendOptions': PytuckyBinaryBackendOptions,
+        'PytuckyBackendOptions': LocalPytuckBackendOptions,
         'pytuck_path': sibling,
     }

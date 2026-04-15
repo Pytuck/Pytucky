@@ -4,7 +4,7 @@ from typing import Optional
 import pytest
 
 from pytucky import Column, Session, Storage, declarative_base, select
-from pytucky.common.options import BinaryBackendOptions
+from pytucky.common.options import PytuckBackendOptions
 
 
 @pytest.mark.feature
@@ -12,7 +12,7 @@ from pytucky.common.options import BinaryBackendOptions
 def test_encryption_roundtrip_levels(tmp_path: Path, level: Optional[str]) -> None:
     """在不同加密等级下，通过高层 Session 路径进行写入与重开读取。"""
     db_path = tmp_path / f"enc-{level or 'plain'}.pytuck"
-    opts = BinaryBackendOptions(encryption=level, password=None if level is None else "secret123")
+    opts = PytuckBackendOptions(encryption=level, password=None if level is None else "secret123")
     db = Storage(file_path=str(db_path), backend_options=opts)
     Base = declarative_base(db)
 
@@ -31,7 +31,7 @@ def test_encryption_roundtrip_levels(tmp_path: Path, level: Optional[str]) -> No
         session.close()
         db.close()
 
-    reopen_opts = BinaryBackendOptions(password=None if level is None else "secret123")
+    reopen_opts = PytuckBackendOptions(password=None if level is None else "secret123")
     reopened = Storage(file_path=str(db_path), backend_options=reopen_opts)
     reopened_session = Session(reopened)
     try:
@@ -49,7 +49,7 @@ def test_lazy_index_uses_store_decryption_on_reopen(tmp_path: Path) -> None:
     """加密文件 reopen 后，lazy index proxy 不直接读取磁盘明文，而应通过 Store 的解密接口。"""
     db_path = tmp_path / "lazy-index.pytuck"
     # create encrypted DB
-    opts = BinaryBackendOptions(encryption='medium', password='secret123')
+    opts = PytuckBackendOptions(encryption='medium', password='secret123')
     db = Storage(file_path=str(db_path), backend_options=opts)
     try:
         db.create_table(
@@ -64,7 +64,7 @@ def test_lazy_index_uses_store_decryption_on_reopen(tmp_path: Path) -> None:
         db.close()
 
         # reopen providing only password (no explicit encryption level)
-        reopened = Storage(file_path=str(db_path), backend_options=BinaryBackendOptions(password='secret123'))
+        reopened = Storage(file_path=str(db_path), backend_options=PytuckBackendOptions(password='secret123'))
         try:
             tbl = reopened.get_table("users")
             # table should be lazy
@@ -86,7 +86,7 @@ def test_lazy_index_uses_store_decryption_on_reopen(tmp_path: Path) -> None:
 def test_reopen_with_password_and_flush_preserves_encryption(tmp_path: Path) -> None:
     """只提供 password 重新打开并 flush 后，文件仍然是加密的（不应包含明文 name 值）。"""
     db_path = tmp_path / "preserve-enc.pytuck"
-    opts = BinaryBackendOptions(encryption='high', password='secret123')
+    opts = PytuckBackendOptions(encryption='high', password='secret123')
     db = Storage(file_path=str(db_path), backend_options=opts)
     try:
         db.create_table(
@@ -101,7 +101,7 @@ def test_reopen_with_password_and_flush_preserves_encryption(tmp_path: Path) -> 
         db.close()
 
         # reopen with only password, modify and flush
-        reopened = Storage(file_path=str(db_path), backend_options=BinaryBackendOptions(password='secret123'))
+        reopened = Storage(file_path=str(db_path), backend_options=PytuckBackendOptions(password='secret123'))
         try:
             reopened.update("users", 1, {"name": "StillSecret"})
             reopened.flush()
@@ -126,7 +126,7 @@ def test_reopen_with_password_and_flush_preserves_encryption(tmp_path: Path) -> 
 def test_sorted_index_range_query_on_encrypted_reopen_uses_store_read(tmp_path: Path) -> None:
     """加密文件 reopen 后，SortedIndexProxy.range_query 的 blob 快速路径应能通过 Store 的解密接口正常工作。"""
     db_path = tmp_path / "sorted-reopen.pytuck"
-    opts = BinaryBackendOptions(encryption='medium', password='secret123')
+    opts = PytuckBackendOptions(encryption='medium', password='secret123')
     db = Storage(file_path=str(db_path), backend_options=opts)
     try:
         db.create_table(
@@ -143,7 +143,7 @@ def test_sorted_index_range_query_on_encrypted_reopen_uses_store_read(tmp_path: 
         db.close()
 
         # reopen providing only password
-        reopened = Storage(file_path=str(db_path), backend_options=BinaryBackendOptions(password='secret123'))
+        reopened = Storage(file_path=str(db_path), backend_options=PytuckBackendOptions(password='secret123'))
         try:
             tbl = reopened.get_table("items")
             assert getattr(tbl, "_lazy_loaded", True) is True

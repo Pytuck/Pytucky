@@ -148,7 +148,7 @@ with db.transaction():
 
 ### SerializationError
 
-PTK7 二进制格式编解码错误。通常表示文件损坏或版本不兼容。
+PTK7 格式编解码错误。通常表示文件损坏或版本不兼容。
 
 ---
 
