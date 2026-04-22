@@ -97,7 +97,7 @@ def declarative_base(
     crud: bool = False,
     sync_schema: bool = False,
     sync_options: SyncOptions | None = None
-) -> Type[PureBaseModel] | Type[CRUDBaseModel]
+) -> type[PureBaseModel] | type[CRUDBaseModel]
 ```
 
 ### 参数
@@ -112,16 +112,15 @@ def declarative_base(
 ### 示例
 
 ```python
-from typing import Type
 from pytucky import Storage, Column, PureBaseModel, CRUDBaseModel, declarative_base
 
 db = Storage(file_path='mydb.pytuck')
 
 # 纯模型
-Base: Type[PureBaseModel] = declarative_base(db)
+Base: type[PureBaseModel] = declarative_base(db)
 
 # Active Record
-Base: Type[CRUDBaseModel] = declarative_base(db, crud=True)
+Base: type[CRUDBaseModel] = declarative_base(db, crud=True)
 
 # 自动同步 schema
 Base = declarative_base(db, sync_schema=True)
@@ -152,10 +151,10 @@ Base = declarative_base(db, sync_schema=True)
 def to_dict(
     self,
     use_column_names: bool = False,
-    include: Set[str] | None = None,
-    exclude: Set[str] | None = None,
+    include: set[str] | None = None,
+    exclude: set[str] | None = None,
     depth: int = 0,
-) -> Dict[str, Any]
+) -> dict[str, Any]
 ```
 
 转换为字典。`depth > 0` 时展开 Relationship。
@@ -166,8 +165,8 @@ def to_dict(
 def to_json(
     self,
     use_column_names: bool = False,
-    include: Set[str] | None = None,
-    exclude: Set[str] | None = None,
+    include: set[str] | None = None,
+    exclude: set[str] | None = None,
     depth: int = 0,
     ensure_ascii: bool = False,
     indent: int | None = None,
@@ -244,7 +243,7 @@ Active Record 基类。模型自带 CRUD 方法，继承自 PureBaseModel。
 ### 示例
 
 ```python
-Base: Type[CRUDBaseModel] = declarative_base(db, crud=True)
+Base: type[CRUDBaseModel] = declarative_base(db, crud=True)
 
 class User(Base):
     __tablename__ = 'users'
@@ -301,14 +300,14 @@ class Order(Base):
     user_id = Column(int, foreign_key=('users', 'id'))
     amount = Column(float)
     # 多对一
-    user: Optional[User] = Relationship('users', foreign_key='user_id')  # type: ignore
+    user: User | None = Relationship('users', foreign_key='user_id')  # type: ignore
 
 class User(Base):
     __tablename__ = 'users'
     id = Column(int, primary_key=True)
     name = Column(str)
     # 一对多
-    orders: List[Order] = Relationship('orders', foreign_key='user_id')  # type: ignore
+    orders: list[Order] = Relationship('orders', foreign_key='user_id')  # type: ignore
 ```
 
 ### 判断规则

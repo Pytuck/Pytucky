@@ -5,14 +5,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Type
 
 import pytest
 
 from pytucky import Column, Storage, declarative_base, Session, select, insert
 from pytucky import PureBaseModel
 from pytucky.backends.store import Store
-
 
 def _build_store_with_data(path: Path, n: int = 50) -> Store:
     """构建带索引数据的 Store 并 flush"""
@@ -30,9 +28,7 @@ def _build_store_with_data(path: Path, n: int = 50) -> Store:
     store.flush()
     return store
 
-
 # ---------- P0 核心测试：重复 lookup 不重复 decode ----------
-
 
 def test_hash_index_proxy_decodes_once_on_repeated_lookup(
     tmp_path: Path,
@@ -75,7 +71,6 @@ def test_hash_index_proxy_decodes_once_on_repeated_lookup(
         f"期望 1 次（首次物化后缓存）"
     )
 
-
 def test_sorted_index_proxy_decodes_once_on_repeated_lookup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -112,9 +107,7 @@ def test_sorted_index_proxy_decodes_once_on_repeated_lookup(
         f"decode_sorted_pairs 被调用了 {decode_calls['count']} 次，期望 1 次"
     )
 
-
 # ---------- overlay 合并测试 ----------
-
 
 def test_proxy_insert_before_materialize_visible_after_lookup(
     tmp_path: Path,
@@ -138,7 +131,6 @@ def test_proxy_insert_before_materialize_visible_after_lookup(
     result = name_index.lookup("phantom_user")
     assert 999 in result, "overlay 插入的记录应在物化后可见"
 
-
 def test_proxy_remove_before_materialize_respected(
     tmp_path: Path,
 ) -> None:
@@ -159,13 +151,11 @@ def test_proxy_remove_before_materialize_respected(
     result = name_index.lookup("user_1")
     assert 1 not in result, "被 remove 的记录不应出现在 lookup 结果中"
 
-
 # ---------- range_query 正确性 ----------
 # 注意：当前 Store schema 反序列化会把 index='sorted' 丢失为 index=True
 # (store.py:543)，导致 reopen 后所有索引都创建为 HashIndexProxy。
 # range_query 功能在高层通过 Storage.query() 的 blob-based 路径实现，
 # 不依赖 proxy 的 range_query。这里只验证 lookup 后不影响正常查询。
-
 
 def test_materialize_does_not_break_subsequent_store_search(
     tmp_path: Path,
@@ -189,9 +179,7 @@ def test_materialize_does_not_break_subsequent_store_search(
     store_results = backend.store.search_index("users", "age", 25)
     assert set(store_results) == result_25
 
-
 # ---------- 高层 ORM 集成测试 ----------
-
 
 def test_orm_repeated_filter_by_indexed_column(
     tmp_path: Path,
@@ -199,7 +187,7 @@ def test_orm_repeated_filter_by_indexed_column(
 ) -> None:
     """通过 ORM select().filter_by() 反复查询索引列，decode 只发生一次"""
     db = Storage(file_path=tmp_path / "orm_mat.pytucky")
-    Base: Type[PureBaseModel] = declarative_base(db)
+    Base: type[PureBaseModel] = declarative_base(db)
 
     class User(Base):
         __tablename__ = "users"
@@ -214,7 +202,7 @@ def test_orm_repeated_filter_by_indexed_column(
 
     # 重新打开
     db2 = Storage(file_path=tmp_path / "orm_mat.pytucky")
-    Base2: Type[PureBaseModel] = declarative_base(db2)
+    Base2: type[PureBaseModel] = declarative_base(db2)
 
     class User2(Base2):
         __tablename__ = "users"

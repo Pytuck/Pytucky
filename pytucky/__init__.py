@@ -5,11 +5,10 @@ Pytucky - 单文件、高性能、纯 Python 文档数据库
 提供类似 SQLAlchemy 的声明式 ORM API，无外部依赖。
 
 示例用法：
-    from typing import Type
-    from pytucky import Storage, declarative_base, Session, Column
+    from pytucky import Storage, declarative_base, Session, Column, PureBaseModel
 
     db = Storage(file_path='mydb.pytucky')
-    Base: Type = declarative_base(db)
+    Base: type[PureBaseModel] = declarative_base(db)
 
     class User(Base):
         __tablename__ = 'users'

@@ -1,11 +1,12 @@
+from __future__ import annotations
+
 from dataclasses import is_dataclass
 from pathlib import Path
 import importlib
 import importlib.util
 import inspect
 import sys
-from typing import Any, Dict, Type
-
+from typing import Any
 
 def _locate_repo_root(start: Path) -> Path:
     cur = start.resolve()
@@ -15,8 +16,7 @@ def _locate_repo_root(start: Path) -> Path:
         cur = cur.parent
     raise AssertionError("Cannot locate pytucky repo root (pyproject.toml not found in ancestors)")
 
-
-def _resolve_backend_options_type(options_module: Any) -> Type[Any]:
+def _resolve_backend_options_type(options_module: Any) -> type[Any]:
     candidates = []
     for attr in dir(options_module):
         value = getattr(options_module, attr)
@@ -45,8 +45,7 @@ def _resolve_backend_options_type(options_module: Any) -> Type[Any]:
         + ', '.join(candidate.__name__ for candidate in candidates)
     )
 
-
-def load_pytuck_symbols(repo_root: Path | None = None) -> Dict[str, Any]:
+def load_pytuck_symbols(repo_root: Path | None = None) -> dict[str, Any]:
     """Load symbols from a sibling pytuck repository.
 
     Returns a dict with keys: Storage, Column, PytuckBackendOptions, and local pytucky Storage/Column/Options as well.

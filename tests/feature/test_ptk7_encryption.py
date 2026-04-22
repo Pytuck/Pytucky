@@ -1,15 +1,15 @@
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
 from pytucky import Column, Session, Storage, declarative_base, select
 from pytucky.common.options import PytuckBackendOptions
 
-
 @pytest.mark.feature
 @pytest.mark.parametrize("level", [None, "low", "medium", "high"])
-def test_encryption_roundtrip_levels(tmp_path: Path, level: Optional[str]) -> None:
+def test_encryption_roundtrip_levels(tmp_path: Path, level: str | None) -> None:
     """在不同加密等级下，通过高层 Session 路径进行写入与重开读取。"""
     db_path = tmp_path / f"enc-{level or 'plain'}.pytuck"
     opts = PytuckBackendOptions(encryption=level, password=None if level is None else "secret123")
@@ -40,9 +40,6 @@ def test_encryption_roundtrip_levels(tmp_path: Path, level: Optional[str]) -> No
     finally:
         reopened_session.close()
         reopened.close()
-
-
-
 
 @pytest.mark.feature
 def test_lazy_index_uses_store_decryption_on_reopen(tmp_path: Path) -> None:
@@ -80,7 +77,6 @@ def test_lazy_index_uses_store_decryption_on_reopen(tmp_path: Path) -> None:
             db.close()
         except Exception:
             pass
-
 
 @pytest.mark.feature
 def test_reopen_with_password_and_flush_preserves_encryption(tmp_path: Path) -> None:
@@ -120,7 +116,6 @@ def test_reopen_with_password_and_flush_preserves_encryption(tmp_path: Path) -> 
             db.close()
         except Exception:
             pass
-
 
 @pytest.mark.feature
 def test_sorted_index_range_query_on_encrypted_reopen_uses_store_read(tmp_path: Path) -> None:

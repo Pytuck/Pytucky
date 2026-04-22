@@ -17,7 +17,7 @@ PytuckyException(
     table_name: str | None = None,
     column_name: str | None = None,
     pk: Any = None,
-    details: Dict[str, Any] | None = None,
+    details: dict[str, Any] | None = None,
 )
 ```
 

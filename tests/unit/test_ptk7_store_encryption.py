@@ -1,5 +1,6 @@
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
@@ -8,9 +9,7 @@ from pytucky.backends.store import Store
 from pytucky.common.exceptions import ConfigurationError, EncryptionError
 from pytucky.common.options import PytuckBackendOptions
 
-
 _SECRET_VALUE = "Alice-PTK7-Secret"
-
 
 @pytest.mark.parametrize(
     ("encryption", "password", "plaintext_visible"),
@@ -23,8 +22,8 @@ _SECRET_VALUE = "Alice-PTK7-Secret"
 )
 def test_store_roundtrip_with_supported_encryption_modes(
     tmp_path: Path,
-    encryption: Optional[str],
-    password: Optional[str],
+    encryption: str | None,
+    password: str | None,
     plaintext_visible: bool,
 ) -> None:
     file_path = tmp_path / f"{encryption or 'plain'}-store.pytuck"
@@ -48,7 +47,6 @@ def test_store_roundtrip_with_supported_encryption_modes(
     reopened = Store(file_path, options=reopen_options)
     assert reopened.select("users", 1)["name"] == _SECRET_VALUE
 
-
 @pytest.mark.parametrize("level", ["low", "medium", "high"])
 def test_store_rejects_missing_or_wrong_password(tmp_path: Path, level: str) -> None:
     file_path = tmp_path / f"{level}-password-check.pytuck"
@@ -67,7 +65,6 @@ def test_store_rejects_missing_or_wrong_password(tmp_path: Path, level: str) -> 
 
     with pytest.raises(EncryptionError, match="密码错误"):
         Store(file_path, options=PytuckBackendOptions(password="wrong-password"))
-
 
 def test_store_flush_preserves_loaded_encryption_level_when_only_password_is_provided(tmp_path: Path) -> None:
     file_path = tmp_path / "preserve-medium.pytuck"
@@ -89,7 +86,6 @@ def test_store_flush_preserves_loaded_encryption_level_when_only_password_is_pro
     assert b"Bob" not in file_path.read_bytes()
     verified = Store(file_path, options=PytuckBackendOptions(password="secret123"))
     assert verified.select("users", 1)["name"] == "Bob"
-
 
 def test_store_rejects_invalid_encryption_level_before_writing(tmp_path: Path) -> None:
     store = Store(

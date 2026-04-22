@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Type, List
 
 import pytest
 
@@ -10,7 +9,7 @@ from pytucky.query.builder import Condition, or_
 @pytest.mark.feature
 def test_index_equality_query_acceleration(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "idx-eq.pytucky")
-    Base: Type = declarative_base(db)
+    Base = declarative_base(db)
 
     class Person(Base):
         __tablename__ = "persons"

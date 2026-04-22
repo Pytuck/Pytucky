@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import Any
 
 # Ensure project root on path.
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -22,7 +22,6 @@ DEFAULT_RECORD_COUNT = 100
 OUTPUT_DIR = Path(__file__).parent / "benchmark_output"
 TEMP_DIR_NAME = ".tmp_bench"
 TABLE_NAME = "benchmark_users"
-
 
 class Timer:
     def __init__(self) -> None:
@@ -35,13 +34,12 @@ class Timer:
 
     def __exit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc: Optional[BaseException],
-        tb: Optional[TracebackType],
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
     ) -> None:
         del exc_type, exc, tb
         self.elapsed = time.perf_counter() - self.start
-
 
 class PytuckyBenchmark:
     def __init__(self, temp_dir: Path, extended: bool = False) -> None:
@@ -49,11 +47,11 @@ class PytuckyBenchmark:
         self.extended = extended
         self.file_path = temp_dir / "bench_db.pytucky"
 
-    def setup(self) -> Tuple[Storage, Session, Type[PureBaseModel]]:
+    def setup(self) -> tuple[Storage, Session, type[PureBaseModel]]:
         self._cleanup_storage_files()
 
         db = Storage(file_path=self.file_path)
-        Base: Type[PureBaseModel] = declarative_base(db)
+        Base: type[PureBaseModel] = declarative_base(db)
 
         class BenchmarkUser(Base):
             __tablename__ = TABLE_NAME
@@ -79,7 +77,7 @@ class PytuckyBenchmark:
         db.close()
         return timer.elapsed
 
-    def bench_insert(self, session: Session, model_class: Type[PureBaseModel], count: int) -> float:
+    def bench_insert(self, session: Session, model_class: type[PureBaseModel], count: int) -> float:
         with Timer() as timer:
             for index in range(count):
                 statement = insert(model_class).values(
@@ -118,7 +116,7 @@ class PytuckyBenchmark:
     def bench_query_pk(
         self,
         session: Session,
-        model_class: Type[PureBaseModel],
+        model_class: type[PureBaseModel],
         count: int,
     ) -> float:
         lookups = min(100, count)
@@ -132,7 +130,7 @@ class PytuckyBenchmark:
     def bench_query_indexed(
         self,
         session: Session,
-        model_class: Type[PureBaseModel],
+        model_class: type[PureBaseModel],
         count: int,
     ) -> float:
         lookups = min(100, count)
@@ -143,13 +141,13 @@ class PytuckyBenchmark:
                 _ = result.first()
         return timer.elapsed
 
-    def run(self, count: int) -> Dict[str, Any]:
-        results: Dict[str, Any] = {
+    def run(self, count: int) -> dict[str, Any]:
+        results: dict[str, Any] = {
             "engine": "pytucky",
             "record_count": count,
         }
-        db: Optional[Storage] = None
-        session: Optional[Session] = None
+        db: Storage | None = None
+        session: Session | None = None
         try:
             db, session, user_model = self.setup()
             results["insert"] = self.bench_insert(session, user_model, count)
@@ -177,7 +175,6 @@ class PytuckyBenchmark:
             results["success"] = False
             results["error"] = str(exc)
         return results
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="pytucky minimal benchmark")
@@ -207,8 +204,7 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-
-def build_output_payload(record_count: int, results: List[Dict[str, Any]]) -> Dict[str, Any]:
+def build_output_payload(record_count: int, results: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "timestamp": datetime.now().isoformat(),
         "system": platform.system(),
@@ -217,12 +213,10 @@ def build_output_payload(record_count: int, results: List[Dict[str, Any]]) -> Di
         "results": results,
     }
 
-
-def write_output_json(output_path: Path, payload: Dict[str, Any]) -> None:
+def write_output_json(output_path: Path, payload: dict[str, Any]) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as file_obj:
         json.dump(payload, file_obj, indent=2, ensure_ascii=False)
-
 
 def build_temp_dir(keep: bool) -> Path:
     if keep:
@@ -233,14 +227,12 @@ def build_temp_dir(keep: bool) -> Path:
     temp_dir.mkdir(parents=True, exist_ok=True)
     return temp_dir
 
-
 def cleanup_temp_dir(temp_dir: Path, keep: bool) -> None:
     if keep or not temp_dir.exists():
         return
     shutil.rmtree(str(temp_dir), ignore_errors=True)
 
-
-def main(args: Optional[argparse.Namespace] = None) -> List[Dict[str, Any]]:
+def main(args: argparse.Namespace | None = None) -> list[dict[str, Any]]:
     if args is None:
         args = parse_args()
 
@@ -254,7 +246,6 @@ def main(args: Optional[argparse.Namespace] = None) -> List[Dict[str, Any]]:
         return results
     finally:
         cleanup_temp_dir(temp_dir, bool(args.keep))
-
 
 if __name__ == "__main__":
     main()

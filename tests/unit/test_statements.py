@@ -1,16 +1,15 @@
+from __future__ import annotations
+
 import os
 from pathlib import Path
-from typing import List
 
 import pytest
 
 from pytucky import Storage, declarative_base, Session, Column, select, insert, update, delete
 
-
 def make_storage(tmp_path: Path) -> Storage:
     dbfile = tmp_path / "test_statements.pytucky"
     return Storage(file_path=str(dbfile))
-
 
 def make_user_model(storage: Storage):
     Base = declarative_base(storage)
@@ -23,8 +22,7 @@ def make_user_model(storage: Storage):
 
     return User
 
-
-def seed_users(session: Session, User) -> List[int]:
+def seed_users(session: Session, User) -> list[int]:
     # convenience: insert three users
     r1 = session.execute(insert(User).values(name='Alice', age=30))
     r2 = session.execute(insert(User).values(name='Bob', age=25))
@@ -32,7 +30,6 @@ def seed_users(session: Session, User) -> List[int]:
     # commit to ensure persistence
     session.commit()
     return [r1.inserted_primary_key, r2.inserted_primary_key, r3.inserted_primary_key]
-
 
 def test_select_with_pk_fast_path(tmp_path):
     storage = make_storage(tmp_path)
@@ -48,7 +45,6 @@ def test_select_with_pk_fast_path(tmp_path):
     assert user.id == target_pk
     assert user.name == 'Alice'
 
-
 def test_select_filter_by(tmp_path):
     storage = make_storage(tmp_path)
     User = make_user_model(storage)
@@ -60,7 +56,6 @@ def test_select_filter_by(tmp_path):
     users = result.all()
     assert len(users) == 1
     assert users[0].name == 'Alice'
-
 
 def test_select_order_by_single_column(tmp_path):
     storage = make_storage(tmp_path)
@@ -81,7 +76,6 @@ def test_select_order_by_single_column(tmp_path):
     ages = [u.age for u in users]
     assert ages == sorted(ages, reverse=True)
 
-
 def test_select_limit_offset(tmp_path):
     storage = make_storage(tmp_path)
     User = make_user_model(storage)
@@ -93,7 +87,6 @@ def test_select_limit_offset(tmp_path):
     users = res.all()
     assert len(users) == 2
 
-
 def test_select_returning_empty(tmp_path):
     storage = make_storage(tmp_path)
     User = make_user_model(storage)
@@ -104,7 +97,6 @@ def test_select_returning_empty(tmp_path):
     res = session.execute(select(User).filter_by(name='NoSuch'))
     assert res.rowcount() == 0
     assert res.first() is None
-
 
 def test_insert_single_and_batch(tmp_path):
     storage = make_storage(tmp_path)
@@ -132,7 +124,6 @@ def test_insert_single_and_batch(tmp_path):
     res = session.execute(select(User).filter_by(name='Eve'))
     assert res.rowcount() == 1
 
-
 def test_update_with_pk_fast_path_and_condition(tmp_path):
     storage = make_storage(tmp_path)
     User = make_user_model(storage)
@@ -154,7 +145,6 @@ def test_update_with_pk_fast_path_and_condition(tmp_path):
     r2 = session.execute(update(User).where(User.age > 30).values(age=1))
     # Charlie had age 35 -> should be updated
     assert r2.rowcount() >= 1
-
 
 def test_delete_with_pk_fast_path_and_missing(tmp_path):
     storage = make_storage(tmp_path)

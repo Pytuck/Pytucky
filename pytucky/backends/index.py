@@ -2,7 +2,7 @@
 # 中文注释，英文标识符
 from __future__ import annotations
 
-from typing import Any, List, Tuple, Optional
+from typing import Any
 import struct
 from pytucky.core.types import TypeRegistry
 from pytucky.core.orm import Column
@@ -14,10 +14,9 @@ from pytucky.core.orm import Column
 HEADER_STRUCT = struct.Struct('<B I')
 PK_STRUCT = struct.Struct('<q')
 
-
-def build_sorted_pairs(records: List[Tuple[int, dict[str, Any]]], column: Column) -> List[Tuple[Any, int]]:
+def build_sorted_pairs(records: list[tuple[int, dict[str, Any]]], column: Column) -> list[tuple[Any, int]]:
     """从 records 构建 (value, pk) 列表，跳过 None 并按 value 升序排序"""
-    out: List[Tuple[Any, int]] = []
+    out: list[tuple[Any, int]] = []
     for pk, record in records:
         value = record.get(column.name)
         if value is None:
@@ -26,8 +25,7 @@ def build_sorted_pairs(records: List[Tuple[int, dict[str, Any]]], column: Column
     out.sort(key=lambda t: (t[0], t[1]))
     return out
 
-
-def encode_sorted_pairs(pairs: List[Tuple[Any, int]], column: Column) -> bytes:
+def encode_sorted_pairs(pairs: list[tuple[Any, int]], column: Column) -> bytes:
     """将已排序的 pairs 编码为 bytes"""
     # 获取类型编码与 codec
     type_code, codec = TypeRegistry.get_codec(column.col_type)
@@ -40,8 +38,7 @@ def encode_sorted_pairs(pairs: List[Tuple[Any, int]], column: Column) -> bytes:
         buf.extend(PK_STRUCT.pack(int(pk)))
     return bytes(buf)
 
-
-def decode_sorted_pairs(blob: bytes, column: Column) -> List[Tuple[Any, int]]:
+def decode_sorted_pairs(blob: bytes, column: Column) -> list[tuple[Any, int]]:
     """从 blob 解码为 pairs 列表
 
     出现任何损坏或截断时统一抛出 SerializationError，而不是 ValueError 或静默返回。
@@ -56,7 +53,7 @@ def decode_sorted_pairs(blob: bytes, column: Column) -> List[Tuple[Any, int]]:
         raise SerializationError('invalid header') from e
     _, codec = TypeRegistry.get_codec_by_code(type_code)
     offset = HEADER_STRUCT.size
-    out: List[Tuple[Any, int]] = []
+    out: list[tuple[Any, int]] = []
     for _ in range(count):
         # decode value using codec which returns (value, consumed)
         try:
@@ -74,26 +71,24 @@ def decode_sorted_pairs(blob: bytes, column: Column) -> List[Tuple[Any, int]]:
         out.append((value, pk))
     return out
 
-
-def search_sorted_pairs(blob: bytes, value: Any, column: Column) -> List[int]:
+def search_sorted_pairs(blob: bytes, value: Any, column: Column) -> list[int]:
     """等值查找，返回匹配的 pk 列表"""
     pairs = decode_sorted_pairs(blob, column)
     # linear scan acceptable for now; but pairs are sorted so we can binary search
-    result: List[int] = []
+    result: list[int] = []
     for v, pk in pairs:
         if v == value:
             result.append(pk)
     return result
 
-
 def range_search_sorted_pairs(
     blob: bytes,
     column: Column,
-    min_value: Optional[Any] = None,
-    max_value: Optional[Any] = None,
+    min_value: Any | None = None,
+    max_value: Any | None = None,
     include_min: bool = True,
     include_max: bool = True,
-) -> List[int]:
+) -> list[int]:
     """范围查找，基于解码后列表的二分逻辑实现"""
     pairs = decode_sorted_pairs(blob, column)
     values = [v for v, _ in pairs]
@@ -107,5 +102,5 @@ def range_search_sorted_pairs(
         right = len(values)
     else:
         right = bisect_right(values, max_value) if include_max else bisect_left(values, max_value)
-    result: List[int] = [pk for _, pk in pairs[left:right]]
+    result: list[int] = [pk for _, pk in pairs[left:right]]
     return result

@@ -4,7 +4,9 @@ Pytucky 查询构建器
 提供链式查询API
 """
 
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Generic, TYPE_CHECKING, Union
+from __future__ import annotations
+
+from typing import Any, Callable, Generic, TYPE_CHECKING
 
 from ..common.typing import T
 from ..common.exceptions import QueryError
@@ -14,8 +16,7 @@ if TYPE_CHECKING:
     from ..core.orm import Column
     from ..core.storage import Storage
 
-
-_OPERATOR_EVAL: Dict[str, Callable[[Any, Any], bool]] = {
+_OPERATOR_EVAL: dict[str, Callable[[Any, Any], bool]] = {
     '=': lambda x, y: x == y,
     '>': lambda x, y: x > y,
     '<': lambda x, y: x < y,
@@ -27,7 +28,6 @@ _OPERATOR_EVAL: Dict[str, Callable[[Any, Any], bool]] = {
     'STARTSWITH': lambda x, y: isinstance(x, str) and isinstance(y, str) and x.lower().startswith(y.lower()),
     'ENDSWITH': lambda x, y: isinstance(x, str) and isinstance(y, str) and x.lower().endswith(y.lower()),
 }
-
 
 class Condition:
     """查询条件"""
@@ -68,7 +68,6 @@ class Condition:
     def __repr__(self) -> str:
         return f"Condition({self.field} {self.operator} {self.value})"
 
-
 class BinaryExpression:
     """
     二元表达式：表示 Column 和值之间的比较操作
@@ -98,11 +97,6 @@ class BinaryExpression:
     def __repr__(self) -> str:
         return f"BinaryExpression({self.column.name} {self.operator} {self.value})"
 
-
-# 表达式类型：BinaryExpression 或 LogicalExpression
-ExpressionType = Union['BinaryExpression', 'LogicalExpression']
-
-
 class CompositeCondition:
     """
     组合条件：用于 AND/OR/NOT 逻辑评估
@@ -110,7 +104,7 @@ class CompositeCondition:
     支持递归嵌套，可以表示任意复杂的布尔逻辑组合。
     """
 
-    def __init__(self, operator: str, conditions: List[Union[Condition, 'CompositeCondition']]):
+    def __init__(self, operator: str, conditions: list[Condition | 'CompositeCondition']):
         """
         初始化组合条件
 
@@ -146,7 +140,6 @@ class CompositeCondition:
         sep = f" {self.operator} "
         return f"({sep.join(repr(c) for c in self.conditions)})"
 
-
 class LogicalExpression:
     """
     逻辑组合表达式：表示 AND/OR/NOT 组合
@@ -167,7 +160,7 @@ class LogicalExpression:
         or_(User.role == 'admin', and_(User.age >= 21, User.verified == True))
     """
 
-    def __init__(self, operator: str, expressions: List[ExpressionType]):
+    def __init__(self, operator: str, expressions: list[ExpressionType]):
         """
         初始化逻辑表达式
 
@@ -187,7 +180,7 @@ class LogicalExpression:
         Returns:
             CompositeCondition 对象
         """
-        conditions: List[Union[Condition, CompositeCondition]] = []
+        conditions: list[Condition | CompositeCondition] = []
         for expr in self.expressions:
             if isinstance(expr, BinaryExpression):
                 conditions.append(expr.to_condition())
@@ -204,6 +197,8 @@ class LogicalExpression:
         args = ', '.join(repr(e) for e in self.expressions)
         return f"{func_name}({args})"
 
+# 表达式类型：BinaryExpression 或 LogicalExpression
+ExpressionType = BinaryExpression | LogicalExpression
 
 def or_(*expressions: ExpressionType) -> LogicalExpression:
     """
@@ -235,7 +230,6 @@ def or_(*expressions: ExpressionType) -> LogicalExpression:
         raise QueryError("or_() requires at least 2 expressions")
     return LogicalExpression('OR', list(expressions))
 
-
 def and_(*expressions: ExpressionType) -> LogicalExpression:
     """
     创建 AND 组合表达式
@@ -264,7 +258,6 @@ def and_(*expressions: ExpressionType) -> LogicalExpression:
         raise QueryError("and_() requires at least 2 expressions")
     return LogicalExpression('AND', list(expressions))
 
-
 def not_(expression: ExpressionType) -> LogicalExpression:
     """
     创建 NOT 表达式
@@ -286,15 +279,13 @@ def not_(expression: ExpressionType) -> LogicalExpression:
     """
     return LogicalExpression('NOT', [expression])
 
-
 # 条件类型：Condition 或 CompositeCondition
-ConditionType = Union[Condition, CompositeCondition]
-
+ConditionType = Condition | CompositeCondition
 
 class Query(Generic[T]):
     """查询构建器（支持链式调用）"""
 
-    def __init__(self, model_class: Type[T], storage: Optional['Storage'] = None) -> None:
+    def __init__(self, model_class: type[T], storage: 'Storage' | None = None) -> None:
         """
         初始化查询构建器
 
@@ -304,9 +295,9 @@ class Query(Generic[T]):
         """
         self.model_class = model_class
         self.storage = storage  # 新 API：通过参数传入
-        self._conditions: List[ConditionType] = []
-        self._order_by_fields: List[Tuple[str, bool]] = []  # [(field, desc), ...]
-        self._limit_value: Optional[int] = None
+        self._conditions: list[ConditionType] = []
+        self._order_by_fields: list[tuple[str, bool]] = []  # [(field, desc), ...]
+        self._limit_value: int | None = None
         self._offset_value: int = 0
 
     def filter(self, *expressions: ExpressionType) -> 'Query[T]':
@@ -429,7 +420,7 @@ class Query(Generic[T]):
         self._offset_value = n
         return self
 
-    def first(self) -> Optional[T]:
+    def first(self) -> T | None:
         """
         返回第一条记录
 
@@ -445,7 +436,7 @@ class Query(Generic[T]):
 
         return results[0] if results else None
 
-    def all(self) -> List[T]:
+    def all(self) -> list[T]:
         """
         执行查询并返回所有结果
 
@@ -486,7 +477,7 @@ class Query(Generic[T]):
         records = self._execute()
         return len(records)
 
-    def _execute(self) -> List[dict]:
+    def _execute(self) -> list[dict]:
         """
         执行查询（内部方法）
 
@@ -494,7 +485,7 @@ class Query(Generic[T]):
             记录字典列表
         """
         # 获取 storage 实例（新 API 优先，兼容旧 API）
-        storage: Optional['Storage'] = (
+        storage: 'Storage' | None = (
             self.storage or
             getattr(self.model_class, '__storage__', None) or
             getattr(self.model_class, '_db', None)
@@ -504,7 +495,7 @@ class Query(Generic[T]):
             raise QueryError(f"No database configured for {self.model_class.__name__}")
 
         # 获取表名（支持新旧两种风格）
-        table_name: Optional[str] = (
+        table_name: str | None = (
             getattr(self.model_class, '__tablename__', None) or
             getattr(self.model_class, '_table_name', None)
         )
@@ -516,7 +507,7 @@ class Query(Generic[T]):
         if len(self._order_by_fields) == 1:
             # 单列排序：下推给 Storage.query（可利用 SortedIndex 优化）
             field, desc = self._order_by_fields[0]
-            records: List[dict] = storage.query(
+            records: list[dict] = storage.query(
                 table_name, self._conditions,
                 order_by=field, order_desc=desc
             )

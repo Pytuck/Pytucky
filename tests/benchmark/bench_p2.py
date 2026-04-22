@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Type
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -21,13 +21,11 @@ RECORD_COUNT = 10_000
 ROUNDS = 3
 TABLE_NAME = "users"
 
-
 def timer(func, *args, **kwargs) -> float:
     start = time.perf_counter()
     result = func(*args, **kwargs)
     elapsed = time.perf_counter() - start
     return elapsed, result
-
 
 def bench_session_add_all_commit(tmp: Path, count: int) -> float:
     """Opt A 目标：Session add_all + commit 的插入时间。"""
@@ -36,7 +34,7 @@ def bench_session_add_all_commit(tmp: Path, count: int) -> float:
         db_path.unlink()
 
     db = Storage(file_path=db_path)
-    Base: Type[PureBaseModel] = declarative_base(db)
+    Base: type[PureBaseModel] = declarative_base(db)
 
     class User(Base):
         __tablename__ = TABLE_NAME
@@ -55,7 +53,6 @@ def bench_session_add_all_commit(tmp: Path, count: int) -> float:
     session.close()
     db.close()
     return elapsed
-
 
 def bench_materialize_flush(tmp: Path, count: int) -> float:
     """Opt B 目标：对有改动表执行 flush（触发 _materialize_records）。"""
@@ -86,8 +83,7 @@ def bench_materialize_flush(tmp: Path, count: int) -> float:
     db2.close()
     return elapsed
 
-
-def bench_save_reopen_firstquery(tmp: Path, count: int) -> Dict[str, float]:
+def bench_save_reopen_firstquery(tmp: Path, count: int) -> dict[str, float]:
     """基础指标：save / reopen / reopen_first_query。"""
     db_path = tmp / "bench_basic.pytucky"
     if db_path.exists():
@@ -127,10 +123,9 @@ def bench_save_reopen_firstquery(tmp: Path, count: int) -> Dict[str, float]:
         "reopen_first_query": first_query_time,
     }
 
-
-def run_all(label: str) -> Dict[str, float]:
+def run_all(label: str) -> dict[str, float]:
     import tempfile
-    results: Dict[str, list] = {}
+    results: dict[str, list] = {}
 
     for round_idx in range(ROUNDS):
         with tempfile.TemporaryDirectory() as tmp_str:
@@ -147,7 +142,7 @@ def run_all(label: str) -> Dict[str, float]:
                 results.setdefault(k, []).append(v)
 
     # 取均值
-    avg: Dict[str, float] = {}
+    avg: dict[str, float] = {}
     for k, vals in results.items():
         avg[k] = sum(vals) / len(vals)
 
@@ -163,7 +158,6 @@ def run_all(label: str) -> Dict[str, float]:
             print(f"  {k:30s} {v:10.4f} s")
     print()
     return avg
-
 
 if __name__ == "__main__":
     run_all("P2 性能测试")

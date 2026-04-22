@@ -4,9 +4,11 @@ Pytucky 类型系统
 定义数据类型编码和编解码器
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from enum import IntEnum
-from typing import Any, Callable, Tuple, Dict, Type
+from typing import Any, Callable
 import struct
 import json
 import base64
@@ -14,7 +16,6 @@ from datetime import datetime, date, timedelta, timezone
 
 from ..common.exceptions import SerializationError
 from ..common.typing import ColumnTypes
-
 
 class TypeCode(IntEnum):
     """类型编码"""
@@ -29,7 +30,6 @@ class TypeCode(IntEnum):
     LIST = 9
     DICT = 10
 
-
 class TypeCodec(ABC):
     """类型编解码器抽象基类"""
 
@@ -39,10 +39,9 @@ class TypeCodec(ABC):
         pass
 
     @abstractmethod
-    def decode(self, data: bytes) -> Tuple[Any, int]:
+    def decode(self, data: bytes) -> tuple[Any, int]:
         """解码字节为值，返回(值, 消耗的字节数)"""
         pass
-
 
 class IntCodec(TypeCodec):
     """整型编解码器"""
@@ -54,12 +53,11 @@ class IntCodec(TypeCodec):
             raise SerializationError(f"Expected int, got {type(value)}")
         return struct.pack('<q', value)  # 8 bytes, signed long long, little-endian
 
-    def decode(self, data: bytes) -> Tuple[int, int]:
+    def decode(self, data: bytes) -> tuple[int, int]:
         if len(data) < 8:
             raise SerializationError(f"Not enough data to decode int (need 8 bytes, got {len(data)})")
         value = struct.unpack('<q', data[:8])[0]
         return value, 8
-
 
 class StrCodec(TypeCodec):
     """字符串编解码器"""
@@ -73,7 +71,7 @@ class StrCodec(TypeCodec):
         length = len(encoded)
         return struct.pack('<H', length) + encoded  # 2 bytes length + data
 
-    def decode(self, data: bytes) -> Tuple[str, int]:
+    def decode(self, data: bytes) -> tuple[str, int]:
         if len(data) < 2:
             raise SerializationError(f"Not enough data to decode str length")
         length = struct.unpack('<H', data[:2])[0]
@@ -81,7 +79,6 @@ class StrCodec(TypeCodec):
             raise SerializationError(f"Not enough data to decode str (need {2 + length}, got {len(data)})")
         value = data[2:2+length].decode('utf-8')
         return value, 2 + length
-
 
 class FloatCodec(TypeCodec):
     """浮点型编解码器"""
@@ -93,12 +90,11 @@ class FloatCodec(TypeCodec):
             raise SerializationError(f"Expected float, got {type(value)}")
         return struct.pack('<d', float(value))  # 8 bytes, double, little-endian
 
-    def decode(self, data: bytes) -> Tuple[float, int]:
+    def decode(self, data: bytes) -> tuple[float, int]:
         if len(data) < 8:
             raise SerializationError(f"Not enough data to decode float (need 8 bytes, got {len(data)})")
         value = struct.unpack('<d', data[:8])[0]
         return value, 8
-
 
 class BoolCodec(TypeCodec):
     """布尔型编解码器"""
@@ -110,12 +106,11 @@ class BoolCodec(TypeCodec):
             raise SerializationError(f"Expected bool, got {type(value)}")
         return struct.pack('<?', value)  # 1 byte
 
-    def decode(self, data: bytes) -> Tuple[bool, int]:
+    def decode(self, data: bytes) -> tuple[bool, int]:
         if len(data) < 1:
             raise SerializationError(f"Not enough data to decode bool")
         value = struct.unpack('<?', data[:1])[0]
         return value, 1
-
 
 class BytesCodec(TypeCodec):
     """字节型编解码器"""
@@ -128,7 +123,7 @@ class BytesCodec(TypeCodec):
         length = len(value)
         return struct.pack('<I', length) + value  # 4 bytes length + data
 
-    def decode(self, data: bytes) -> Tuple[bytes, int]:
+    def decode(self, data: bytes) -> tuple[bytes, int]:
         if len(data) < 4:
             raise SerializationError(f"Not enough data to decode bytes length")
         length = struct.unpack('<I', data[:4])[0]
@@ -136,7 +131,6 @@ class BytesCodec(TypeCodec):
             raise SerializationError(f"Not enough data to decode bytes (need {4 + length}, got {len(data)})")
         value = data[4:4+length]
         return value, 4 + length
-
 
 class DatetimeCodec(TypeCodec):
     """日期时间编解码器（支持时区）
@@ -172,7 +166,7 @@ class DatetimeCodec(TypeCodec):
 
         return struct.pack('<qh', timestamp_us, tz_offset_minutes)
 
-    def decode(self, data: bytes) -> Tuple[datetime, int]:
+    def decode(self, data: bytes) -> tuple[datetime, int]:
         if len(data) < 10:
             raise SerializationError(f"Not enough data to decode datetime (need 10 bytes, got {len(data)})")
 
@@ -188,7 +182,6 @@ class DatetimeCodec(TypeCodec):
             value = utc_dt.astimezone(tz)
 
         return value, 10
-
 
 class DateCodec(TypeCodec):
     """日期编解码器
@@ -210,13 +203,12 @@ class DateCodec(TypeCodec):
         days = (value - self.EPOCH).days
         return struct.pack('<i', days)
 
-    def decode(self, data: bytes) -> Tuple[date, int]:
+    def decode(self, data: bytes) -> tuple[date, int]:
         if len(data) < 4:
             raise SerializationError(f"Not enough data to decode date (need 4 bytes, got {len(data)})")
         days = struct.unpack('<i', data[:4])[0]
         value = self.EPOCH + timedelta(days=days)
         return value, 4
-
 
 class TimedeltaCodec(TypeCodec):
     """时间间隔编解码器
@@ -233,13 +225,12 @@ class TimedeltaCodec(TypeCodec):
         total_seconds = value.total_seconds()
         return struct.pack('<d', total_seconds)
 
-    def decode(self, data: bytes) -> Tuple[timedelta, int]:
+    def decode(self, data: bytes) -> tuple[timedelta, int]:
         if len(data) < 8:
             raise SerializationError(f"Not enough data to decode timedelta (need 8 bytes, got {len(data)})")
         total_seconds = struct.unpack('<d', data[:8])[0]
         value = timedelta(seconds=total_seconds)
         return value, 8
-
 
 class ListCodec(TypeCodec):
     """列表编解码器（JSON 序列化）
@@ -258,7 +249,7 @@ class ListCodec(TypeCodec):
         encoded = json_str.encode('utf-8')
         return struct.pack('<I', len(encoded)) + encoded
 
-    def decode(self, data: bytes) -> Tuple[list, int]:
+    def decode(self, data: bytes) -> tuple[list, int]:
         if len(data) < 4:
             raise SerializationError(f"Not enough data to decode list length")
         length = struct.unpack('<I', data[:4])[0]
@@ -267,7 +258,6 @@ class ListCodec(TypeCodec):
         json_str = data[4:4+length].decode('utf-8')
         value = json.loads(json_str)
         return value, 4 + length
-
 
 class DictCodec(TypeCodec):
     """字典编解码器（JSON 序列化）
@@ -286,7 +276,7 @@ class DictCodec(TypeCodec):
         encoded = json_str.encode('utf-8')
         return struct.pack('<I', len(encoded)) + encoded
 
-    def decode(self, data: bytes) -> Tuple[dict, int]:
+    def decode(self, data: bytes) -> tuple[dict, int]:
         if len(data) < 4:
             raise SerializationError(f"Not enough data to decode dict length")
         length = struct.unpack('<I', data[:4])[0]
@@ -296,36 +286,30 @@ class DictCodec(TypeCodec):
         value = json.loads(json_str)
         return value, 4 + length
 
-
 # ========== 文本序列化函数 ==========
 
 def _serialize_bytes(value: Any) -> str:
     """序列化 bytes 为 base64 字符串"""
     return base64.b64encode(value).decode('ascii')
 
-
 def _serialize_datetime(value: Any) -> str:
     """序列化 datetime 为 ISO 格式字符串"""
     return value.isoformat()
-
 
 def _serialize_date(value: Any) -> str:
     """序列化 date 为 ISO 格式字符串"""
     return value.isoformat()
 
-
 def _serialize_timedelta(value: Any) -> float:
     """序列化 timedelta 为总秒数"""
     return value.total_seconds()
-
 
 def _serialize_json(value: Any) -> str:
     """序列化 list/dict 为 JSON 字符串"""
     return json.dumps(value, ensure_ascii=False)
 
-
 # 文本序列化函数注册表
-_TEXT_SERIALIZERS: Dict[type, Callable[[Any], Any]] = {
+_TEXT_SERIALIZERS: dict[type, Callable[[Any], Any]] = {
     bytes: _serialize_bytes,
     datetime: _serialize_datetime,
     date: _serialize_date,
@@ -333,7 +317,6 @@ _TEXT_SERIALIZERS: Dict[type, Callable[[Any], Any]] = {
     list: _serialize_json,
     dict: _serialize_json,
 }
-
 
 # ========== 文本反序列化函数 ==========
 
@@ -343,13 +326,11 @@ def _deserialize_bytes(value: Any) -> bytes:
         return value
     return base64.b64decode(value)
 
-
 def _deserialize_datetime(value: Any) -> datetime:
     """反序列化 datetime"""
     if isinstance(value, datetime):
         return value
     return datetime.fromisoformat(value)
-
 
 def _deserialize_date(value: Any) -> date:
     """反序列化 date"""
@@ -359,13 +340,11 @@ def _deserialize_date(value: Any) -> date:
         return value.date()
     return date.fromisoformat(value)
 
-
 def _deserialize_timedelta(value: Any) -> timedelta:
     """反序列化 timedelta"""
     if isinstance(value, timedelta):
         return value
     return timedelta(seconds=float(value))
-
 
 def _deserialize_list(value: Any) -> list:
     """反序列化 list"""
@@ -373,13 +352,11 @@ def _deserialize_list(value: Any) -> list:
         return value
     return json.loads(value)
 
-
 def _deserialize_dict(value: Any) -> dict:
     """反序列化 dict"""
     if isinstance(value, dict):
         return value
     return json.loads(value)
-
 
 def _deserialize_bool(value: Any) -> bool:
     """反序列化 bool"""
@@ -389,13 +366,11 @@ def _deserialize_bool(value: Any) -> bool:
         return value.lower() in ('true', '1', 'yes')
     return bool(value)
 
-
 def _deserialize_int(value: Any) -> int:
     """反序列化 int"""
     if isinstance(value, int) and not isinstance(value, bool):
         return value
     return int(value)
-
 
 def _deserialize_float(value: Any) -> float:
     """反序列化 float"""
@@ -403,9 +378,8 @@ def _deserialize_float(value: Any) -> float:
         return value
     return float(value)
 
-
 # 文本反序列化函数注册表
-_TEXT_DESERIALIZERS: Dict[Type, Callable[[Any], Any]] = {
+_TEXT_DESERIALIZERS: dict[Type, Callable[[Any], Any]] = {
     bytes: _deserialize_bytes,
     datetime: _deserialize_datetime,
     date: _deserialize_date,
@@ -417,11 +391,10 @@ _TEXT_DESERIALIZERS: Dict[Type, Callable[[Any], Any]] = {
     float: _deserialize_float,
 }
 
-
 class TypeRegistry:
     """类型注册表"""
 
-    _codecs: Dict[ColumnTypes, Tuple[TypeCode, TypeCodec]] = {
+    _codecs: dict[ColumnTypes, tuple[TypeCode, TypeCodec]] = {
         int: (TypeCode.INT, IntCodec()),
         str: (TypeCode.STR, StrCodec()),
         float: (TypeCode.FLOAT, FloatCodec()),
@@ -434,7 +407,7 @@ class TypeRegistry:
         dict: (TypeCode.DICT, DictCodec()),
     }
 
-    _type_code_to_type: Dict[TypeCode, ColumnTypes] = {
+    _type_code_to_type: dict[TypeCode, ColumnTypes] = {
         TypeCode.INT: int,
         TypeCode.STR: str,
         TypeCode.FLOAT: float,
@@ -448,7 +421,7 @@ class TypeRegistry:
     }
 
     @classmethod
-    def get_codec(cls, col_type: ColumnTypes) -> Tuple[TypeCode, TypeCodec]:
+    def get_codec(cls, col_type: ColumnTypes) -> tuple[TypeCode, TypeCodec]:
         """获取类型的编解码器"""
         if col_type not in cls._codecs:
             raise SerializationError(f"Unsupported type: {col_type}")
@@ -462,7 +435,7 @@ class TypeRegistry:
         return cls._type_code_to_type[type_code]
 
     @classmethod
-    def get_codec_by_code(cls, type_code: TypeCode) -> Tuple[TypeCode, TypeCodec]:
+    def get_codec_by_code(cls, type_code: TypeCode) -> tuple[TypeCode, TypeCodec]:
         """根据类型编码获取编解码器"""
         py_type = cls.get_type_from_code(type_code)
         return cls.get_codec(py_type)
@@ -476,7 +449,7 @@ class TypeRegistry:
     # ========== 文本格式序列化支持 ==========
 
     # 类型名称映射（用于文本格式存储）
-    _type_names: Dict[ColumnTypes, str] = {
+    _type_names: dict[ColumnTypes, str] = {
         int: 'int',
         str: 'str',
         float: 'float',

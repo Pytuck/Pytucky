@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 import struct
-from typing import Any, BinaryIO, Dict, List, Optional, Tuple
+from typing import Any, BinaryIO
 
 from ..common.exceptions import (
     ConfigurationError,
@@ -34,8 +34,6 @@ from ..common.crypto import (
 )
 from ..common.options import PytuckBackendOptions
 
-
-
 ROW_LENGTH_STRUCT = struct.Struct("<I")
 U16_STRUCT = struct.Struct("<H")
 U32_STRUCT = struct.Struct("<I")
@@ -45,49 +43,45 @@ FLAG_NULLABLE = 1 << 0
 FLAG_PRIMARY_KEY = 1 << 1
 FLAG_INDEXED = 1 << 2
 
-
 @dataclass
 class TableOverlay:
-    inserted: Dict[Any, Dict[str, Any]] = field(default_factory=dict)
-    updated: Dict[Any, Dict[str, Any]] = field(default_factory=dict)
+    inserted: dict[Any, dict[str, Any]] = field(default_factory=dict)
+    updated: dict[Any, dict[str, Any]] = field(default_factory=dict)
     deleted: set[Any] = field(default_factory=set)
-    row_cache: Dict[Any, Dict[str, Any]] = field(default_factory=dict)
-
+    row_cache: dict[Any, dict[str, Any]] = field(default_factory=dict)
 
 @dataclass
 class TableState:
     name: str
-    columns: List[Column]
-    primary_key: Optional[str]
+    columns: list[Column]
+    primary_key: str | None
     next_id: int
     record_count: int
     data_offset: int
     data_size: int
-    pk_index: Dict[Any, Tuple[int, int]] = field(default_factory=dict)
-    index_meta: Dict[str, Any] = field(default_factory=dict)
+    pk_index: dict[Any, tuple[int, int]] = field(default_factory=dict)
+    index_meta: dict[str, Any] = field(default_factory=dict)
     overlay: TableOverlay = field(default_factory=TableOverlay)
-
 
 @dataclass(frozen=True)
 class _EncodedTable:
     schema_blob: bytes
-    records: List[Tuple[Any, Dict[str, Any]]]
-    pk_entries: List[PkDirEntry]
+    records: list[tuple[Any, dict[str, Any]]]
+    pk_entries: list[PkDirEntry]
     data_blob: bytes
     pk_dir_blob: bytes
     record_count: int
     next_id: int
 
-
 class Store:
-    def __init__(self, file_path: Path | str, options: Optional[PytuckBackendOptions] = None, *, open_existing: bool = True) -> None:
+    def __init__(self, file_path: Path | str, options: PytuckBackendOptions | None = None, *, open_existing: bool = True) -> None:
         self.file_path = Path(file_path)
         self.options = options or PytuckBackendOptions()
-        self._tables: Dict[str, TableState] = {}
-        self._reader: Optional[BinaryIO] = None
+        self._tables: dict[str, TableState] = {}
+        self._reader: BinaryIO | None = None
         self._cipher = None
         self._payload_offset = 0
-        self._loaded_encryption_level: Optional[str] = None
+        self._loaded_encryption_level: str | None = None
         # Optionally open existing file. When open_existing is False we start with an empty in-memory state
         if open_existing and self.file_path.exists() and self.file_path.is_file() and self.file_path.stat().st_size > 0:
             self.open()
@@ -98,7 +92,7 @@ class Store:
         except KeyError as exc:
             raise TableNotFoundError(table_name) from exc
 
-    def create_table(self, name: str, columns: List[Column]) -> None:
+    def create_table(self, name: str, columns: list[Column]) -> None:
         primary_key = None
         for column in columns:
             if column.primary_key:
@@ -146,7 +140,6 @@ class Store:
             )
         return self._decrypt_region(offset, raw)
 
-
     def open(self) -> None:
         self.close()
         self._cipher = None
@@ -179,7 +172,7 @@ class Store:
             # payload offset is the area after table refs — set before reading pk dirs so pk_dir can be decrypted
             self._payload_offset = header.table_ref_offset + header.table_ref_size
 
-            tables: Dict[str, TableState] = {}
+            tables: dict[str, TableState] = {}
             for ref in refs:
                 columns, primary_key = schemas[ref.name]
                 # read pk dir using helpers that will decrypt when necessary
@@ -208,7 +201,7 @@ class Store:
                 tables[ref.name] = state
             self._tables = tables
 
-    def select(self, table_name: str, pk: Any) -> Dict[str, Any]:
+    def select(self, table_name: str, pk: Any) -> dict[str, Any]:
         state = self.table_state(table_name)
         pk = self._normalize_pk(state, pk)
         overlay = state.overlay
@@ -228,7 +221,7 @@ class Store:
         overlay.row_cache[pk] = record
         return dict(record)
 
-    def insert(self, table_name: str, data: Dict[str, Any]) -> Any:
+    def insert(self, table_name: str, data: dict[str, Any]) -> Any:
         state = self.table_state(table_name)
         pk = self._resolve_insert_pk(state, data)
         if self._pk_exists(state, pk):
@@ -240,7 +233,7 @@ class Store:
         state.overlay.row_cache[pk] = record
         return pk
 
-    def update(self, table_name: str, pk: Any, data: Dict[str, Any]) -> None:
+    def update(self, table_name: str, pk: Any, data: dict[str, Any]) -> None:
         state = self.table_state(table_name)
         pk = self._normalize_pk(state, pk)
         if pk in state.overlay.inserted:
@@ -270,11 +263,11 @@ class Store:
         state.overlay.row_cache.pop(pk, None)
 
     def flush(self) -> None:
-        schema_blobs: Dict[str, bytes] = {}
-        encoded_tables: Dict[str, _EncodedTable] = {}
-        index_meta_entries: Dict[str, List[ColumnIndexMeta]] = {}
-        index_meta_blobs: Dict[str, bytes] = {}
-        index_data_blobs: Dict[str, bytes] = {}
+        schema_blobs: dict[str, bytes] = {}
+        encoded_tables: dict[str, _EncodedTable] = {}
+        index_meta_entries: dict[str, list[ColumnIndexMeta]] = {}
+        index_meta_blobs: dict[str, bytes] = {}
+        index_data_blobs: dict[str, bytes] = {}
         ordered_tables = list(self._tables.keys())
 
         from . import index
@@ -296,8 +289,8 @@ class Store:
 
                 import json
 
-                pt_meta_entries: List[ColumnIndexMeta] = []
-                pt_meta_json: List[Dict[str, Any]] = []
+                pt_meta_entries: list[ColumnIndexMeta] = []
+                pt_meta_json: list[dict[str, Any]] = []
                 pt_data_blob = bytearray()
                 for column in state.columns:
                     if not column.index:
@@ -335,8 +328,8 @@ class Store:
 
             import json
 
-            meta_entries: List[ColumnIndexMeta] = []
-            meta_json: List[Dict[str, Any]] = []
+            meta_entries: list[ColumnIndexMeta] = []
+            meta_json: list[dict[str, Any]] = []
             data_blob = bytearray()
             for column in state.columns:
                 if not column.index:
@@ -371,7 +364,7 @@ class Store:
             else self._loaded_encryption_level
         )
 
-        crypto_meta: Optional[CryptoMetadataV7] = None
+        crypto_meta: CryptoMetadataV7 | None = None
         cipher = None
         if effective_encryption is not None:
             if effective_encryption not in ENCRYPTION_LEVELS:
@@ -388,7 +381,7 @@ class Store:
         schema_offset = 64 + (CRYPTO_META_STRUCT.size if crypto_meta is not None else 0)
         table_ref_offset = schema_offset + len(schema_catalog)
 
-        temp_refs: List[TableBlockRef] = []
+        temp_refs: list[TableBlockRef] = []
         for table_name in ordered_tables:
             encoded = encoded_tables[table_name]
             temp_refs.append(
@@ -409,7 +402,7 @@ class Store:
         all_refs_size = sum(len(ref.pack()) for ref in temp_refs)
         current_offset = table_ref_offset + all_refs_size
 
-        refs: List[TableBlockRef] = []
+        refs: list[TableBlockRef] = []
         table_refs_blob = bytearray()
         payload_buffer = bytearray()
         for table_name in ordered_tables:
@@ -488,12 +481,12 @@ class Store:
 
     def _refresh_tables_after_flush(
         self,
-        refs: List[TableBlockRef],
-        encoded_tables: Dict[str, _EncodedTable],
-        index_meta_entries: Dict[str, List[ColumnIndexMeta]],
+        refs: list[TableBlockRef],
+        encoded_tables: dict[str, _EncodedTable],
+        index_meta_entries: dict[str, list[ColumnIndexMeta]],
     ) -> None:
         previous_tables = self._tables
-        refreshed: Dict[str, TableState] = {}
+        refreshed: dict[str, TableState] = {}
         for ref in refs:
             previous_state = previous_tables[ref.name]
             encoded = encoded_tables[ref.name]
@@ -527,7 +520,7 @@ class Store:
     def _encode_table(
         self,
         state: TableState,
-        live_records: Optional[List[Tuple[Any, Dict[str, Any]]]] = None,
+        live_records: list[tuple[Any, dict[str, Any]]] | None = None,
     ) -> _EncodedTable:
         if live_records is None:
             live_records = self._materialize_records(state)
@@ -540,7 +533,7 @@ class Store:
         ]
 
         data_blob = bytearray()
-        entries: List[PkDirEntry] = []
+        entries: list[PkDirEntry] = []
         for pk, record in live_records:
             null_bits = 0
             payload = bytearray()
@@ -570,8 +563,8 @@ class Store:
             next_id=state.next_id,
         )
 
-    def _materialize_records(self, state: TableState) -> List[Tuple[Any, Dict[str, Any]]]:
-        live: Dict[Any, Dict[str, Any]] = {}
+    def _materialize_records(self, state: TableState) -> list[tuple[Any, dict[str, Any]]]:
+        live: dict[Any, dict[str, Any]] = {}
         # overlay 覆盖部分：updated 和 inserted 优先
         for pk in state.overlay.updated:
             if pk not in state.overlay.deleted:
@@ -641,7 +634,7 @@ class Store:
             next_id=state.next_id,
         )
 
-    def _read_row_at(self, state: TableState, pk: Any, offset: int, length: int) -> Dict[str, Any]:
+    def _read_row_at(self, state: TableState, pk: Any, offset: int, length: int) -> dict[str, Any]:
         row_blob = self._read_region(offset, length)
         if len(row_blob) < ROW_LENGTH_STRUCT.size:
             raise SerializationError("Not enough data to decode row length")
@@ -656,7 +649,7 @@ class Store:
             record[state.primary_key] = pk
         return record
 
-    def _resolve_insert_pk(self, state: TableState, data: Dict[str, Any]) -> Any:
+    def _resolve_insert_pk(self, state: TableState, data: dict[str, Any]) -> Any:
         if state.primary_key is None:
             pk = state.next_id
             state.next_id += 1
@@ -674,8 +667,8 @@ class Store:
                 state.next_id = pk + 1
         return pk
 
-    def _validate_record(self, state: TableState, data: Dict[str, Any], pk: Any) -> Dict[str, Any]:
-        validated: Dict[str, Any] = {}
+    def _validate_record(self, state: TableState, data: dict[str, Any], pk: Any) -> dict[str, Any]:
+        validated: dict[str, Any] = {}
         for column in state.columns:
             assert column.name is not None
             if column.name == state.primary_key:
@@ -701,7 +694,7 @@ class Store:
             return pk
         return column.validate(pk)
 
-    def _primary_key_column(self, state: TableState) -> Optional[Column]:
+    def _primary_key_column(self, state: TableState) -> Column | None:
         if state.primary_key is None:
             return None
         for column in state.columns:
@@ -709,7 +702,7 @@ class Store:
                 return column
         return None
 
-    def _encode_schema_catalog(self, table_schemas: Dict[str, bytes]) -> bytes:
+    def _encode_schema_catalog(self, table_schemas: dict[str, bytes]) -> bytes:
         """Produce a pytuck-compatible JSON schema document."""
         import json
 
@@ -743,7 +736,7 @@ class Store:
 
     def _decode_schema_catalog(
         self, blob: bytes, table_count: int
-    ) -> Dict[str, Tuple[List[Column], Optional[str]]]:
+    ) -> dict[str, tuple[list[Column], str | None]]:
         """Decode either the legacy binary schema catalog or a pytuck JSON schema document.
 
         Returns mapping table_name -> (columns_list, primary_key_name)
@@ -799,15 +792,15 @@ class Store:
         # else legacy binary format
         return self._decode_schema_catalog_legacy(blob, table_count)
 
-    def _decode_schema_catalog_legacy(self, blob: bytes, table_count: int) -> Dict[str, Tuple[List[Column], Optional[str]]]:
+    def _decode_schema_catalog_legacy(self, blob: bytes, table_count: int) -> dict[str, tuple[list[Column], str | None]]:
         offset = 0
-        schemas: Dict[str, Tuple[List[Column], Optional[str]]] = {}
+        schemas: dict[str, tuple[list[Column], str | None]] = {}
         for _ in range(table_count):
             table_name, offset = self._unpack_string(blob, offset)
             primary_key_name, offset = self._unpack_optional_string(blob, offset)
             column_count = U16_STRUCT.unpack(blob[offset : offset + U16_STRUCT.size])[0]
             offset += U16_STRUCT.size
-            columns: List[Column] = []
+            columns: list[Column] = []
             for _ in range(column_count):
                 column_name, offset = self._unpack_string(blob, offset)
                 type_name, offset = self._unpack_string(blob, offset)
@@ -844,17 +837,17 @@ class Store:
             blob.extend(COLUMN_FLAGS_STRUCT.pack(flags))
         return bytes(blob)
 
-    def _decode_table_refs(self, blob: bytes, table_count: int) -> List[TableBlockRef]:
+    def _decode_table_refs(self, blob: bytes, table_count: int) -> list[TableBlockRef]:
         offset = 0
-        refs: List[TableBlockRef] = []
+        refs: list[TableBlockRef] = []
         for _ in range(table_count):
             ref, consumed = TableBlockRef.unpack(blob[offset:])
             refs.append(ref)
             offset += consumed
         return refs
 
-    def _read_pk_dir(self, file_obj: Any, ref: TableBlockRef) -> Dict[Any, Tuple[int, int]]:
-        pk_index: Dict[Any, Tuple[int, int]] = {}
+    def _read_pk_dir(self, file_obj: Any, ref: TableBlockRef) -> dict[Any, tuple[int, int]]:
+        pk_index: dict[Any, tuple[int, int]] = {}
         if ref.pk_dir_size == 0:
             return pk_index
         if file_obj is not None:
@@ -891,7 +884,7 @@ class Store:
             pk_index[entry.pk] = (abs_off, entry.length)
         return pk_index
 
-    def _decode_index_meta(self, blob: bytes, ref: TableBlockRef) -> Dict[str, ColumnIndexMeta]:
+    def _decode_index_meta(self, blob: bytes, ref: TableBlockRef) -> dict[str, ColumnIndexMeta]:
         import json
 
         stripped = blob.lstrip()
@@ -901,7 +894,7 @@ class Store:
             except Exception:
                 parsed = None
             if isinstance(parsed, list):
-                decoded: Dict[str, ColumnIndexMeta] = {}
+                decoded: dict[str, ColumnIndexMeta] = {}
                 for entry in parsed:
                     column_name = entry.get("column")
                     if not column_name:
@@ -937,12 +930,12 @@ class Store:
             raise SerializationError(f"String too long for PTK7 schema field: {len(encoded)} bytes")
         return U16_STRUCT.pack(len(encoded)) + encoded
 
-    def _pack_optional_string(self, value: Optional[str]) -> bytes:
+    def _pack_optional_string(self, value: str | None) -> bytes:
         if value is None:
             return U16_STRUCT.pack(NONE_NAME_MARKER)
         return self._pack_string(value)
 
-    def _unpack_string(self, blob: bytes, offset: int) -> Tuple[str, int]:
+    def _unpack_string(self, blob: bytes, offset: int) -> tuple[str, int]:
         if offset + U16_STRUCT.size > len(blob):
             raise SerializationError("Not enough data to decode string length")
         length = U16_STRUCT.unpack(blob[offset : offset + U16_STRUCT.size])[0]
@@ -955,7 +948,7 @@ class Store:
         except UnicodeDecodeError as exc:
             raise SerializationError("Invalid UTF-8 string in PTK7 schema") from exc
 
-    def _unpack_optional_string(self, blob: bytes, offset: int) -> Tuple[Optional[str], int]:
+    def _unpack_optional_string(self, blob: bytes, offset: int) -> tuple[str | None, int]:
         if offset + U16_STRUCT.size > len(blob):
             raise SerializationError("Not enough data to decode optional string length")
         length = U16_STRUCT.unpack(blob[offset : offset + U16_STRUCT.size])[0]
@@ -963,7 +956,7 @@ class Store:
             return None, offset + U16_STRUCT.size
         return self._unpack_string(blob, offset)
 
-    def search_index(self, table_name: str, column_name: str, value: Any) -> List[Any]:
+    def search_index(self, table_name: str, column_name: str, value: Any) -> list[Any]:
         """在指定表的索引列上查找等值，返回匹配的 pk 列表。合并 overlay 语义：
         - overlay.inserted/updated 的匹配应可见
         - overlay.deleted 中的 pk 应被剔除

@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from ..backends.store import Store, TableState, TableOverlay
 from ..core.storage import Table
@@ -8,7 +10,6 @@ from ..common.options import PytuckBackendOptions
 from ..common.exceptions import SerializationError
 from .base import StorageBackend
 from .format import FileHeader, HEADER_STRUCT
-
 
 class PytuckyBackend(StorageBackend):
     """Adapter backend that exposes Store to the high-level Storage API.
@@ -19,7 +20,7 @@ class PytuckyBackend(StorageBackend):
 
     ENGINE_NAME = 'pytucky'
 
-    def __init__(self, file_path: Path, options: Optional[PytuckBackendOptions] = None):
+    def __init__(self, file_path: Path, options: PytuckBackendOptions | None = None):
         super().__init__(file_path, options or PytuckBackendOptions())
         # ensure suffix: only when no suffix provided, default to .pytuck
         if self.file_path.suffix == '':
@@ -27,14 +28,14 @@ class PytuckyBackend(StorageBackend):
         # initialize store; offset map built lazily on demand
         # pass backend options through to Store so encryption/password etc. are honored
         self.store = Store(self.file_path, self.options)
-        self._offset_map: Optional[Dict[int, tuple[str, Any]]] = None
+        self._offset_map: dict[int, tuple[str, Any]] | None = None
 
     def _rebuild_offset_map(self) -> None:
         """Rebuild internal offset lookup from the current Store state (lazy, on demand only).
 
         Maps each data offset to (table_name, pk) for O(1) table/record resolution by file offset.
         """
-        omap: Dict[int, tuple[str, Any]] = {}
+        omap: dict[int, tuple[str, Any]] = {}
         for tname, state in self.store._tables.items():
             for pk, (off, length) in state.pk_index.items():
                 omap[off] = (tname, pk)
@@ -80,13 +81,13 @@ class PytuckyBackend(StorageBackend):
         except Exception:
             return False, None
 
-    def load(self) -> Dict[str, Table]:
+    def load(self) -> dict[str, Table]:
         # Map Store table states to core.Table objects without materializing rows
-        tables: Dict[str, Table] = {}
+        tables: dict[str, Table] = {}
         for name, state in self.store._tables.items():
             # build Column list expected by Table
             cols = [col for col in state.columns]
-            # state.columns is List[Column]
+            # state.columns is list[Column]
             table = Table(state.name, state.columns, state.primary_key, None)
             table.next_id = state.next_id
             table._backend = self
@@ -114,8 +115,8 @@ class PytuckyBackend(StorageBackend):
                     self._table = table_name
                     self._column = column_obj
                     self._materialized = False
-                    self._added: Dict[Any, set] = {}
-                    self._removed: Dict[Any, set] = {}
+                    self._added: dict[Any, set] = {}
+                    self._removed: dict[Any, set] = {}
 
                 def _materialize(self) -> None:
                     if self._materialized:
@@ -198,8 +199,8 @@ class PytuckyBackend(StorageBackend):
                     self._table = table_name
                     self._column = column_obj
                     self._materialized = False
-                    self._added: Dict[Any, set] = {}
-                    self._removed: Dict[Any, set] = {}
+                    self._added: dict[Any, set] = {}
+                    self._removed: dict[Any, set] = {}
 
                 def _materialize(self) -> None:
                     if self._materialized:
@@ -328,13 +329,13 @@ class PytuckyBackend(StorageBackend):
             tables[name] = table
         return tables
 
-    def populate_tables_with_data(self, tables: Dict[str, Table]) -> None:
+    def populate_tables_with_data(self, tables: dict[str, Table]) -> None:
         # Ensure all lazy tables materialize via Table._ensure_all_loaded
         for table in tables.values():
             if table._lazy_loaded:
                 table._ensure_all_loaded()
 
-    def read_lazy_record(self, file_path: Path, offset: int, columns: Dict[str, Column], pk: Any, *, table_name: Optional[str] = None) -> Dict[str, Any]:
+    def read_lazy_record(self, file_path: Path, offset: int, columns: dict[str, Column], pk: Any, *, table_name: str | None = None) -> dict[str, Any]:
         try:
             # 快速路径：调用方已知 table_name，直接 select，跳过 offset_map
             if table_name is not None:
@@ -359,13 +360,13 @@ class PytuckyBackend(StorageBackend):
         except Exception as exc:
             raise SerializationError(f'V7 read lazy record failed: {exc}') from exc
 
-    def save(self, tables: Dict[str, Table], *, changed_tables: Optional[set] = None) -> None:
+    def save(self, tables: dict[str, Table], *, changed_tables: set | None = None) -> None:
         # Convert high-level tables into Store internal states and flush via store.flush.
         # Rebuild directly from table scan results for changed tables to avoid per-row Store.insert overhead.
         # For unchanged tables, reuse existing Store.TableState to avoid materializing lazy tables.
         changed_tables = set(changed_tables or set())
         # capture previous on-disk states to allow reusing unchanged tables without materializing
-        prev_states: Dict[str, TableState] = {k: v for k, v in getattr(self.store, '_tables', {}).items()}
+        prev_states: dict[str, TableState] = {k: v for k, v in getattr(self.store, '_tables', {}).items()}
         # close current store to prepare writing new file
         # preserve loaded encryption level so that reopening with only a password
         # can keep writing back the same encryption level
@@ -382,7 +383,7 @@ class PytuckyBackend(StorageBackend):
         # overwrite the newly created Store's state.
         if prev_loaded_encryption is not None and getattr(self.options, 'encryption', None) is None:
             self.store._loaded_encryption_level = prev_loaded_encryption
-        rebuilt_tables: Dict[str, TableState] = {}
+        rebuilt_tables: dict[str, TableState] = {}
 
         for name, table in tables.items():
             if name not in changed_tables and name in prev_states:

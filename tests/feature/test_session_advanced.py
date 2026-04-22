@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Type
 
 import pytest
 
@@ -11,7 +10,7 @@ from pytucky.common.exceptions import TransactionError, RecordNotFoundError
 @pytest.mark.feature
 def test_flush_triggers_before_after_insert(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "session-evt.pytucky")
-    Base: Type = declarative_base(db)
+    Base = declarative_base(db)
 
     class User(Base):
         __tablename__ = "users"

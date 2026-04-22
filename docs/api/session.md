@@ -69,7 +69,7 @@ session.rollback()
 ### get
 
 ```python
-def get(self, model_class: Type[T], pk: Any) -> Optional[T]
+def get(self, model_class: type[T], pk: Any) -> T | None
 ```
 
 通过主键获取对象。优先从 identity map 返回缓存实例。
@@ -127,7 +127,7 @@ session.commit()
 ### bulk_insert
 
 ```python
-def bulk_insert(self, instances: List[PureBaseModel]) -> List[Any]
+def bulk_insert(self, instances: list[PureBaseModel]) -> list[Any]
 ```
 
 立即批量写入 Storage 内存（不经过 flush 队列）。触发 `before_bulk_insert` / `after_bulk_insert`。
@@ -149,7 +149,7 @@ session.commit()  # 持久化到磁盘
 ### bulk_update
 
 ```python
-def bulk_update(self, instances: List[PureBaseModel]) -> int
+def bulk_update(self, instances: list[PureBaseModel]) -> int
 ```
 
 立即批量更新。实例必须已有主键。

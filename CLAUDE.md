@@ -102,7 +102,7 @@ db = Storage(file_path='mydb.pytucky')
 ## 开发约定
 
 ### 代码风格
-- 使用 Python 3.7+ 类型注解
+- 使用 Python 3.10+ 类型注解
 - 遵循 PEP 8 规范
 - 中文注释，英文代码
 
@@ -144,7 +144,7 @@ uv run pytest tests/ -v
 
 ```bash
 # 安装开发依赖
-uv pip install -e ".[dev]"
+uv sync --extra dev
 
 # 一键运行所有测试
 uv run pytest tests/ -v

@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Type
 
 import pytest
 
@@ -11,7 +10,7 @@ from pytucky.core.prefetch import prefetch, PrefetchOption
 @pytest.mark.feature
 def test_one_to_many_and_many_to_one_lazy_loading(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "rel-one-many.pytucky")
-    Base: Type = declarative_base(db, crud=True)
+    Base = declarative_base(db, crud=True)
 
     class Author(Base):
         __tablename__ = 'authors'
