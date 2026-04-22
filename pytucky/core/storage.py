@@ -28,6 +28,7 @@ from ..common.exceptions import (
 
 if TYPE_CHECKING:
     from ..backends.base import StorageBackend
+    from .orm import PureBaseModel
 
 class TransactionSnapshot:
     """
@@ -133,7 +134,7 @@ class Table:
         # 懒加载支持
         self._pk_offsets: dict[Any, int] | None = None  # {pk: file_offset}
         self._data_file: Path | None = None  # 数据文件路径
-        self._backend: Any | None = None  # PTK7 后端引用（用于读取记录）
+        self._backend: StorageBackend | None = None  # PTK7 后端引用（用于读取记录）
         self._lazy_loaded: bool = False  # 是否为懒加载模式
 
         # 在 runtime 维护显式的 dirty PK 集合（用于 PTK7 lazy fast-path）
@@ -570,7 +571,10 @@ class Table:
 
         offset: int = self._pk_offsets[pk]  # type: ignore
 
-        return self._backend.read_lazy_record(self._data_file, offset, self.columns, pk, table_name=self.name)
+        record = self._backend.read_lazy_record(
+            self._data_file, offset, self.columns, pk, table_name=self.name
+        )
+        return record
 
     def has_pk(self, pk: Any) -> bool:
         """判断主键是否存在（包含懒加载未入内存的记录）"""
@@ -1069,7 +1073,7 @@ class Storage:
         self._transaction_dirty_flag: bool = False
 
         # 模型注册表（表名 -> 模型类，用于 Relationship 解析）
-        self._model_registry: dict[str, Type] = {}
+        self._model_registry: dict[str, type[PureBaseModel]] = {}
 
         # 初始化后端
         self.backend: StorageBackend | None = None
@@ -1089,7 +1093,7 @@ class Storage:
 
     # ==================== 模型注册表方法 ====================
 
-    def _register_model(self, table_name: str, model_cls: Type) -> None:
+    def _register_model(self, table_name: str, model_cls: type[PureBaseModel]) -> None:
         """
         注册模型类（按表名）
 
@@ -1099,7 +1103,7 @@ class Storage:
         """
         self._model_registry[table_name] = model_cls
 
-    def _get_model_by_table(self, table_name: str) -> Type | None:
+    def _get_model_by_table(self, table_name: str) -> type[PureBaseModel] | None:
         """
         根据表名获取模型类
 

@@ -128,7 +128,7 @@ class Session:
         # 1. 处理待插入对象（按模型类分组，批量插入以减少逐条开销）
         if self._new_objects:
             # 按模型类分组，保持组内插入顺序
-            groups: Ordereddict[type, list[PureBaseModel]] = OrderedDict()
+            groups: OrderedDict[type[PureBaseModel], list[PureBaseModel]] = OrderedDict()
             for instance in self._new_objects:
                 cls = instance.__class__
                 if cls not in groups:

@@ -255,6 +255,7 @@ def encode_row(columns: list[Column], record: dict[str, Any], pk_name: str | Non
     null_bits = 0
     payload = bytearray()
     for index, column in enumerate(payload_columns):
+        assert column.name is not None
         value = record.get(column.name)
         if value is None:
             null_bits |= 1 << index
@@ -272,6 +273,7 @@ def decode_row(columns: list[Column], payload: bytes, pk_name: str | None = None
     offset = NULL_BITMAP_STRUCT.size
     decoded: dict[str, Any] = {}
     for index, column in enumerate(payload_columns):
+        assert column.name is not None
         if null_bits & (1 << index):
             decoded[column.name] = None
             continue

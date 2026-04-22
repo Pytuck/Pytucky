@@ -444,17 +444,16 @@ def get_cipher(level: str, key: bytes) -> CipherType:
     Raises:
         ConfigurationError: 无效的加密等级
     """
-    ciphers = {
-        'low': XORCipher,
-        'medium': LCGCipher,
-        'high': ChaCha20Cipher,
-    }
-    if level not in ciphers:
-        raise ConfigurationError(
-            f"Invalid encryption level: {level}. Must be one of {ENCRYPTION_LEVELS}",
-            details={'level': level, 'valid_levels': ENCRYPTION_LEVELS}
-        )
-    return ciphers[level](key)
+    if level == 'low':
+        return XORCipher(key)
+    if level == 'medium':
+        return LCGCipher(key)
+    if level == 'high':
+        return ChaCha20Cipher(key)
+    raise ConfigurationError(
+        f"Invalid encryption level: {level}. Must be one of {ENCRYPTION_LEVELS}",
+        details={'level': level, 'valid_levels': ENCRYPTION_LEVELS}
+    )
 
 def get_encryption_level_code(level: str) -> int:
     """

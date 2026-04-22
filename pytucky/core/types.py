@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import IntEnum
-from typing import Any, Callable
+from typing import Any, Callable, cast
 import struct
 import json
 import base64
@@ -288,23 +288,23 @@ class DictCodec(TypeCodec):
 
 # ========== 文本序列化函数 ==========
 
-def _serialize_bytes(value: Any) -> str:
+def _serialize_bytes(value: bytes) -> str:
     """序列化 bytes 为 base64 字符串"""
     return base64.b64encode(value).decode('ascii')
 
-def _serialize_datetime(value: Any) -> str:
+def _serialize_datetime(value: datetime) -> str:
     """序列化 datetime 为 ISO 格式字符串"""
     return value.isoformat()
 
-def _serialize_date(value: Any) -> str:
+def _serialize_date(value: date) -> str:
     """序列化 date 为 ISO 格式字符串"""
     return value.isoformat()
 
-def _serialize_timedelta(value: Any) -> float:
+def _serialize_timedelta(value: timedelta) -> float:
     """序列化 timedelta 为总秒数"""
     return value.total_seconds()
 
-def _serialize_json(value: Any) -> str:
+def _serialize_json(value: list[Any] | dict[Any, Any]) -> str:
     """序列化 list/dict 为 JSON 字符串"""
     return json.dumps(value, ensure_ascii=False)
 
@@ -350,13 +350,13 @@ def _deserialize_list(value: Any) -> list:
     """反序列化 list"""
     if isinstance(value, list):
         return value
-    return json.loads(value)
+    return cast(list[Any], json.loads(value))
 
 def _deserialize_dict(value: Any) -> dict:
     """反序列化 dict"""
     if isinstance(value, dict):
         return value
-    return json.loads(value)
+    return cast(dict[Any, Any], json.loads(value))
 
 def _deserialize_bool(value: Any) -> bool:
     """反序列化 bool"""
@@ -379,7 +379,7 @@ def _deserialize_float(value: Any) -> float:
     return float(value)
 
 # 文本反序列化函数注册表
-_TEXT_DESERIALIZERS: dict[Type, Callable[[Any], Any]] = {
+_TEXT_DESERIALIZERS: dict[type[Any], Callable[[Any], Any]] = {
     bytes: _deserialize_bytes,
     datetime: _deserialize_datetime,
     date: _deserialize_date,

@@ -16,6 +16,7 @@ PK_STRUCT = struct.Struct('<q')
 
 def build_sorted_pairs(records: list[tuple[int, dict[str, Any]]], column: Column) -> list[tuple[Any, int]]:
     """从 records 构建 (value, pk) 列表，跳过 None 并按 value 升序排序"""
+    assert column.name is not None
     out: list[tuple[Any, int]] = []
     for pk, record in records:
         value = record.get(column.name)

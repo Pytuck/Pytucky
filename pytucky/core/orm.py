@@ -970,7 +970,7 @@ class Relationship(Generic[RelationshipT]):
         # 检查缓存
         cache_key = f'_cached_{self.name}'
         if hasattr(instance, cache_key):
-            return getattr(instance, cache_key)
+            return cast('Relationship[RelationshipT] | RelationshipT', getattr(instance, cache_key))
 
         # 延迟加载
         target_model = self._resolve_target_model(owner)
@@ -1030,12 +1030,12 @@ class Relationship(Generic[RelationshipT]):
         if storage:
             model = storage._get_model_by_table(self.target_model)
             if model:
-                return model
+                return cast(type[PureBaseModel], model)
 
         # 回退：从模块命名空间按类名查找（兼容旧用法）
         owner_module = sys.modules.get(actual_owner.__module__)
         if owner_module and hasattr(owner_module, self.target_model):
-            return getattr(owner_module, self.target_model)
+            return cast(type[PureBaseModel], getattr(owner_module, self.target_model))
 
         raise ValidationError(
             f"Cannot find model for '{self.target_model}'. "

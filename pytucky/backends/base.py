@@ -60,6 +60,21 @@ class StorageBackend(ABC):
     def read_lazy_record(self, file_path: Path, offset: int, columns: dict[str, Any], pk: Any, *, table_name: str | None = None) -> dict[str, Any]:
         raise NotImplementedError
 
+    def supports_server_side_pagination(self) -> bool:
+        return False
+
+    def query_with_pagination(
+        self,
+        *,
+        table_name: str,
+        conditions: list[dict[str, Any]],
+        limit: int | None,
+        offset: int,
+        order_by: str | None,
+        order_desc: bool,
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
     @classmethod
     def probe(cls, file_path: str | Path) -> tuple[bool, dict[str, Any] | None]:
         return False, None

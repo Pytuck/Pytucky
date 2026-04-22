@@ -6,6 +6,7 @@ from typing import Any
 from ..backends.store import Store, TableState, TableOverlay
 from ..core.storage import Table
 from ..core.orm import Column
+from ..core.index import BaseIndex
 from ..common.options import PytuckBackendOptions
 from ..common.exceptions import SerializationError
 from .base import StorageBackend
@@ -58,7 +59,7 @@ class PytuckyBackend(StorageBackend):
         return True
 
     @staticmethod
-    def probe(file_path: Path):
+    def probe(file_path: str | Path) -> tuple[bool, dict[str, Any] | None]:
         """Probe whether given file_path is a PTK7 store.
 
         Returns (True, info) on match, (False, None) otherwise.
@@ -318,6 +319,7 @@ class PytuckyBackend(StorageBackend):
                         break
                 if col_obj is None:
                     continue
+                index_obj: BaseIndex
                 if col_obj.index == 'sorted':
                     index_obj = SortedIndexProxy(col_name, self.store, state.name, col_obj)
                 else:
@@ -343,6 +345,7 @@ class PytuckyBackend(StorageBackend):
             # 慢路径：延迟构建 offset_map 后查找
             if self._offset_map is None:
                 self._rebuild_offset_map()
+            assert self._offset_map is not None
             entry = self._offset_map.get(offset)
             if entry is None:
                 for tname, state in self.store._tables.items():
@@ -436,30 +439,31 @@ class PytuckyBackend(StorageBackend):
                         state.overlay.inserted[pk] = dict(rec)
                     rebuilt_tables[name] = state
                 else:
-                    prev = prev_states.get(name)
+                    previous_state = prev_states.get(name)
+                    assert previous_state is not None
                     state = TableState(
-                        name=prev.name,
-                        columns=list(prev.columns),
-                        primary_key=prev.primary_key,
+                        name=previous_state.name,
+                        columns=list(previous_state.columns),
+                        primary_key=previous_state.primary_key,
                         next_id=table.next_id,
-                        record_count=prev.record_count,
-                        data_offset=prev.data_offset,
-                        data_size=prev.data_size,
-                        pk_index=dict(prev.pk_index),
-                        index_meta=dict(prev.index_meta),
+                        record_count=previous_state.record_count,
+                        data_offset=previous_state.data_offset,
+                        data_size=previous_state.data_size,
+                        pk_index=dict(previous_state.pk_index),
+                        index_meta=dict(previous_state.index_meta),
                         overlay=TableOverlay(),
                     )
                     # Apply explicit dirty PK sets to overlay without materializing entire table
                     # Inserted: must exist in table.data
                     for pk in inserted_set:
-                        rec = table.data.get(pk)
-                        if rec is not None:
-                            state.overlay.inserted[pk] = dict(rec)
+                        inserted_record = table.data.get(pk)
+                        if inserted_record is not None:
+                            state.overlay.inserted[pk] = dict(inserted_record)
                     # Updated: records that exist on disk and were updated in memory
                     for pk in updated_set:
-                        rec = table.data.get(pk)
-                        if rec is not None:
-                            state.overlay.updated[pk] = dict(rec)
+                        updated_record = table.data.get(pk)
+                        if updated_record is not None:
+                            state.overlay.updated[pk] = dict(updated_record)
                     # Deleted: mark for deletion in overlay
                     for pk in getattr(table, 'deleted', set()):
                         state.overlay.deleted.add(pk)

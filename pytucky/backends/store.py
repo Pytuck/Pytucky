@@ -28,6 +28,7 @@ from .format import (
     CryptoMetadataV7,
 )
 from ..common.crypto import (
+    CipherType,
     CryptoProvider,
     get_cipher,
     ENCRYPTION_LEVELS,
@@ -79,7 +80,7 @@ class Store:
         self.options = options or PytuckBackendOptions()
         self._tables: dict[str, TableState] = {}
         self._reader: BinaryIO | None = None
-        self._cipher = None
+        self._cipher: CipherType | None = None
         self._payload_offset = 0
         self._loaded_encryption_level: str | None = None
         # Optionally open existing file. When open_existing is False we start with an empty in-memory state
@@ -295,6 +296,7 @@ class Store:
                 for column in state.columns:
                     if not column.index:
                         continue
+                    assert column.name is not None
                     cim = state.index_meta.get(column.name)
                     if cim is None:
                         continue
@@ -334,6 +336,7 @@ class Store:
             for column in state.columns:
                 if not column.index:
                     continue
+                assert column.name is not None
                 pairs = index.build_sorted_pairs(live_records, column)
                 column_data_blob = index.encode_sorted_pairs(pairs, column)
                 column_meta = ColumnIndexMeta(
@@ -538,6 +541,7 @@ class Store:
             null_bits = 0
             payload = bytearray()
             for index, (column, codec) in enumerate(payload_layout):
+                assert column.name is not None
                 value = record.get(column.name)
                 if value is None:
                     null_bits |= 1 << index
@@ -651,10 +655,12 @@ class Store:
 
     def _resolve_insert_pk(self, state: TableState, data: dict[str, Any]) -> Any:
         if state.primary_key is None:
-            pk = state.next_id
+            pk: Any = state.next_id
             state.next_id += 1
             return pk
-        pk = data.get(state.primary_key)
+        primary_key = state.primary_key
+        assert primary_key is not None
+        pk = data.get(primary_key)
         if pk is None:
             pk_column = self._primary_key_column(state)
             if pk_column is None or pk_column.col_type is not int:
