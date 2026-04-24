@@ -1,5 +1,16 @@
 # Pytucky
 
+<div align="center">
+  <img src="https://raw.githubusercontent.com/Pytuck/Pytucky/main/logo.png" width="200" alt="logo">
+</div>
+
+[![Gitee](https://img.shields.io/badge/Gitee-Pytuck%2FPytucky-red)](https://gitee.com/Pytuck/Pytucky)
+[![GitHub](https://img.shields.io/badge/GitHub-Pytuck%2FPytucky-blue)](https://github.com/Pytuck/Pytucky)
+
+[![PyPI version](https://badge.fury.io/py/pytucky.svg)](https://badge.fury.io/py/pytucky)
+[![Python Versions](https://img.shields.io/pypi/pyversions/pytucky.svg)](https://pypi.org/project/pytucky/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Pytucky 是一个**纯 Python、零第三方运行时依赖、单文件**的嵌入式文档数据库。
 
 基于 [Pytuck](https://github.com/go9sky/pytuck) 的核心 ORM API（`Column`、`declarative_base`、`Session`、`select/insert/update/delete`），收敛为 **PTK7 单引擎**实现。专为受限 Python 环境（如 Ren'Py）设计，提供类似 SQLAlchemy 的声明式 ORM 体验。
