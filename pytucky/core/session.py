@@ -7,8 +7,10 @@ Session - 会话管理器
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Any, Generator, overload
 from contextlib import contextmanager
+from functools import wraps
+from threading import RLock
+from typing import Any, Callable, Concatenate, Generator, ParamSpec, TypeVar, overload
 
 from ..common.typing import T
 from ..common.exceptions import QueryError, RecordNotFoundError, TransactionError, ValidationError
@@ -19,6 +21,20 @@ from ..query.statements import Statement, Insert, Select, Update, Delete
 from .storage import Storage
 from .orm import PureBaseModel, Column, PSEUDO_PK_NAME
 from .event import event
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def _session_locked(
+    method: Callable[Concatenate["Session", P], R],
+) -> Callable[Concatenate["Session", P], R]:
+    @wraps(method)
+    def wrapper(self: "Session", *args: P.args, **kwargs: P.kwargs) -> R:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 class Session:
     """
@@ -62,6 +78,7 @@ class Session:
         """
         self.storage = storage
         self.autocommit = autocommit
+        self._lock = RLock()
 
         # 对象状态追踪
         self._new_objects: list[PureBaseModel] = []      # 待插入对象
@@ -76,6 +93,7 @@ class Session:
         # 事务状态
         self._in_transaction = False
 
+    @_session_locked
     def add(self, instance: PureBaseModel) -> None:
         """
         添加对象到会话（标记为待插入）
@@ -91,6 +109,7 @@ class Session:
         if self.autocommit:
             self.commit()
 
+    @_session_locked
     def add_all(self, instances: list[PureBaseModel]) -> None:
         """
         批量添加对象到会话
@@ -101,6 +120,7 @@ class Session:
         for instance in instances:
             self.add(instance)
 
+    @_session_locked
     def delete(self, instance: PureBaseModel) -> None:
         """
         标记对象为待删除
@@ -121,6 +141,7 @@ class Session:
         if self.autocommit:
             self.commit()
 
+    @_session_locked
     def flush(self) -> None:
         """
         将待处理的修改刷新到数据库（不提交事务）
@@ -250,6 +271,7 @@ class Session:
         self._dirty_objects_set.clear()
         self._deleted_objects.clear()
 
+    @_session_locked
     def commit(self) -> None:
         """
         提交事务（刷新修改并持久化）
@@ -259,6 +281,7 @@ class Session:
         if self.storage.auto_flush:
             self.storage.flush()
 
+    @_session_locked
     def rollback(self) -> None:
         """
         回滚事务（清空所有待处理修改）
@@ -271,6 +294,7 @@ class Session:
         self._deleted_objects.clear()
         self._identity_map.clear()
 
+    @_session_locked
     def bulk_insert(self, instances: list[PureBaseModel]) -> list[Any]:
         """
         批量插入模型实例（立即写入内存）
@@ -339,6 +363,7 @@ class Session:
 
         return pks
 
+    @_session_locked
     def bulk_update(self, instances: list[PureBaseModel]) -> int:
         """
         批量更新模型实例（立即写入内存，更新全部字段）
@@ -403,6 +428,7 @@ class Session:
 
         return count
 
+    @_session_locked
     def get(self, model_class: type[T], pk: Any) -> T | None:
         """
         通过主键获取对象
@@ -459,6 +485,7 @@ class Session:
         except (RecordNotFoundError, KeyError):
             return None
 
+    @_session_locked
     def refresh(self, instance: PureBaseModel) -> None:
         """
         从数据库刷新实例的所有属性
@@ -542,37 +569,39 @@ class Session:
         from ..query.statements import Select, Insert, Update, Delete
         from ..query.result import Result, CursorResult
 
-        if isinstance(statement, Select):
-            records = statement._execute(self.storage)
-            # 传递 session 引用给 Result，用于自动注册实例
-            # 传递 options（如 prefetch 选项）给 Result
-            return Result(records, statement.model_class, 'select', session=self,
-                          options=getattr(statement, '_options', []))
+        with self._lock:
+            if isinstance(statement, Select):
+                records = statement._execute(self.storage)
+                # 传递 session 引用给 Result，用于自动注册实例
+                # 传递 options（如 prefetch 选项）给 Result
+                return Result(records, statement.model_class, 'select', session=self,
+                              options=getattr(statement, '_options', []))
 
-        elif isinstance(statement, Insert):
-            result_pk = statement._execute(self.storage)
-            # values_list 返回列表，单条返回标量
-            if isinstance(result_pk, list):
-                first_pk = result_pk[0] if result_pk else None
-                return CursorResult(
-                    len(result_pk), statement.model_class, 'insert', inserted_pk=first_pk
+            elif isinstance(statement, Insert):
+                result_pk = statement._execute(self.storage)
+                # values_list 返回列表，单条返回标量
+                if isinstance(result_pk, list):
+                    first_pk = result_pk[0] if result_pk else None
+                    return CursorResult(
+                        len(result_pk), statement.model_class, 'insert', inserted_pk=first_pk
+                    )
+                return CursorResult(1, statement.model_class, 'insert', inserted_pk=result_pk)
+
+            elif isinstance(statement, Update):
+                count = statement._execute(self.storage)
+                return CursorResult(count, statement.model_class, 'update')
+
+            elif isinstance(statement, Delete):
+                count = statement._execute(self.storage)
+                return CursorResult(count, statement.model_class, 'delete')
+
+            else:
+                raise QueryError(
+                    f"Unsupported statement type: {type(statement).__name__}",
+                    details={'statement_type': type(statement).__name__}
                 )
-            return CursorResult(1, statement.model_class, 'insert', inserted_pk=result_pk)
 
-        elif isinstance(statement, Update):
-            count = statement._execute(self.storage)
-            return CursorResult(count, statement.model_class, 'update')
-
-        elif isinstance(statement, Delete):
-            count = statement._execute(self.storage)
-            return CursorResult(count, statement.model_class, 'delete')
-
-        else:
-            raise QueryError(
-                f"Unsupported statement type: {type(statement).__name__}",
-                details={'statement_type': type(statement).__name__}
-            )
-
+    @_session_locked
     def _register_instance(self, instance: PureBaseModel) -> None:
         """
         注册实例到 identity map
@@ -597,6 +626,7 @@ class Session:
         instance._pytuck_session = self
         instance._pytuck_state = 'persistent'
 
+    @_session_locked
     def _get_from_identity_map(self, model_class: type[T], pk: Any) -> T | None:
         """
         从 identity map 获取实例
@@ -611,6 +641,7 @@ class Session:
         key = (model_class, pk)
         return self._identity_map.get(key)  # type: ignore
 
+    @_session_locked
     def _mark_dirty(self, instance: PureBaseModel) -> None:
         """
         标记实例为 dirty（需要更新）
@@ -623,6 +654,7 @@ class Session:
             self._dirty_objects.append(instance)
             self._dirty_objects_set.add(obj_id)
 
+    @_session_locked
     def merge(self, instance: PureBaseModel) -> PureBaseModel:
         """
         合并一个 detached 实例到会话中
@@ -698,6 +730,7 @@ class Session:
         self.add(instance)
         return instance
 
+    @_session_locked
     def query(self, model_class: type[T]) -> Query[T]:
         """
         创建查询构建器（SQLAlchemy 1.4 风格，不推荐，但也不警告）
@@ -731,24 +764,26 @@ class Session:
                 session.add(User(name='Alice'))
                 session.add(User(name='Bob'))
         """
-        if self._in_transaction:
-            raise TransactionError("Nested transactions are not supported in Session")
+        with self._lock:
+            if self._in_transaction:
+                raise TransactionError("Nested transactions are not supported in Session")
 
-        self._in_transaction = True
+            self._in_transaction = True
 
-        try:
-            # 使用 Storage 的事务支持
-            with self.storage.transaction():
-                yield self
-                # 提交 Session 级别的修改
-                self.flush()
-        except Exception:
-            # 回滚 Session 状态
-            self.rollback()
-            raise
-        finally:
-            self._in_transaction = False
+            try:
+                # 使用 Storage 的事务支持
+                with self.storage.transaction():
+                    yield self
+                    # 提交 Session 级别的修改
+                    self.flush()
+            except Exception:
+                # 回滚 Session 状态
+                self.rollback()
+                raise
+            finally:
+                self._in_transaction = False
 
+    @_session_locked
     def close(self) -> None:
         """
         关闭会话，清理所有状态
@@ -786,6 +821,7 @@ class Session:
             assert table_name is not None, f"Model {model_or_table.__name__} must have __tablename__ defined"
             return table_name
 
+    @_session_locked
     def sync_schema(
         self,
         model_class: type[PureBaseModel],
@@ -820,6 +856,7 @@ class Session:
         comment = getattr(model_class, '__table_comment__', None)
         return self.storage.sync_table_schema(table_name, columns, comment, options)
 
+    @_session_locked
     def add_column(
         self,
         model_or_table: type[PureBaseModel] | str,
@@ -849,6 +886,7 @@ class Session:
         table_name = self._resolve_table_name(model_or_table)
         self.storage.add_column(table_name, column, default_value)
 
+    @_session_locked
     def drop_column(
         self,
         model_or_table: type[PureBaseModel] | str,
@@ -876,6 +914,7 @@ class Session:
         table_name = self._resolve_table_name(model_or_table)
         self.storage.drop_column(table_name, column_name)
 
+    @_session_locked
     def alter_column(
         self,
         model_or_table: type[PureBaseModel] | str,
@@ -911,6 +950,7 @@ class Session:
             col_type=col_type, nullable=nullable, default=default
         )
 
+    @_session_locked
     def set_primary_key(
         self,
         model_or_table: type[PureBaseModel] | str,
@@ -930,6 +970,7 @@ class Session:
         table_name = self._resolve_table_name(model_or_table)
         self.storage.set_primary_key(table_name, column_name)
 
+    @_session_locked
     def reorder_columns(
         self,
         model_or_table: type[PureBaseModel] | str,
@@ -949,6 +990,7 @@ class Session:
         table_name = self._resolve_table_name(model_or_table)
         self.storage.reorder_columns(table_name, new_order)
 
+    @_session_locked
     def update_table_comment(
         self,
         model_or_table: type[PureBaseModel] | str,
@@ -968,6 +1010,7 @@ class Session:
         table_name = self._resolve_table_name(model_or_table)
         self.storage.update_table_comment(table_name, comment)
 
+    @_session_locked
     def update_column(
         self,
         model_or_table: type[PureBaseModel] | str,
@@ -1001,6 +1044,7 @@ class Session:
         table_name = self._resolve_table_name(model_or_table)
         self.storage.update_column(table_name, column_name, comment, index)
 
+    @_session_locked
     def drop_table(self, model_or_table: type[PureBaseModel] | str) -> None:
         """
         删除表
@@ -1015,6 +1059,7 @@ class Session:
         table_name = self._resolve_table_name(model_or_table)
         self.storage.drop_table(table_name)
 
+    @_session_locked
     def rename_table(
         self,
         old_model_or_table: type[PureBaseModel] | str,

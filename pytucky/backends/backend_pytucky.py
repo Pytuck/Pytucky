@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from functools import wraps
 from pathlib import Path
-from typing import Any
+from threading import RLock
+from typing import Any, Callable, Concatenate, ParamSpec, TypeVar
 
 from ..backends.store import Store, TableState, TableOverlay
 from ..core.storage import Table
@@ -11,6 +13,20 @@ from ..common.options import PytuckBackendOptions
 from ..common.exceptions import SerializationError
 from .base import StorageBackend
 from .format import FileHeader, HEADER_STRUCT
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def _backend_locked(
+    method: Callable[Concatenate["PytuckyBackend", P], R],
+) -> Callable[Concatenate["PytuckyBackend", P], R]:
+    @wraps(method)
+    def wrapper(self: "PytuckyBackend", *args: P.args, **kwargs: P.kwargs) -> R:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 class PytuckyBackend(StorageBackend):
     """Adapter backend that exposes Store to the high-level Storage API.
@@ -23,6 +39,7 @@ class PytuckyBackend(StorageBackend):
 
     def __init__(self, file_path: Path, options: PytuckBackendOptions | None = None):
         super().__init__(file_path, options or PytuckBackendOptions())
+        self._lock = RLock()
         # ensure suffix: only when no suffix provided, default to .pytuck
         if self.file_path.suffix == '':
             self.file_path = self.file_path.with_suffix('.pytuck')
@@ -31,6 +48,7 @@ class PytuckyBackend(StorageBackend):
         self.store = Store(self.file_path, self.options)
         self._offset_map: dict[int, tuple[str, Any]] | None = None
 
+    @_backend_locked
     def _rebuild_offset_map(self) -> None:
         """Rebuild internal offset lookup from the current Store state (lazy, on demand only).
 
@@ -49,6 +67,7 @@ class PytuckyBackend(StorageBackend):
     def exists(self) -> bool:
         return self.file_path.exists()
 
+    @_backend_locked
     def delete(self) -> None:
         self.store.close()
         if self.file_path.exists():
@@ -82,6 +101,7 @@ class PytuckyBackend(StorageBackend):
         except Exception:
             return False, None
 
+    @_backend_locked
     def load(self) -> dict[str, Table]:
         # Map Store table states to core.Table objects without materializing rows
         tables: dict[str, Table] = {}
@@ -337,6 +357,7 @@ class PytuckyBackend(StorageBackend):
             if table._lazy_loaded:
                 table._ensure_all_loaded()
 
+    @_backend_locked
     def read_lazy_record(self, file_path: Path, offset: int, columns: dict[str, Column], pk: Any, *, table_name: str | None = None) -> dict[str, Any]:
         try:
             # 快速路径：调用方已知 table_name，直接 select，跳过 offset_map
@@ -363,6 +384,7 @@ class PytuckyBackend(StorageBackend):
         except Exception as exc:
             raise SerializationError(f'V7 read lazy record failed: {exc}') from exc
 
+    @_backend_locked
     def save(self, tables: dict[str, Table], *, changed_tables: set | None = None) -> None:
         # Convert high-level tables into Store internal states and flush via store.flush.
         # Rebuild directly from table scan results for changed tables to avoid per-row Store.insert overhead.
@@ -491,5 +513,6 @@ class PytuckyBackend(StorageBackend):
         # invalidate offset map; will be rebuilt lazily if needed
         self._offset_map = None
 
+    @_backend_locked
     def close(self) -> None:
         self.store.close()

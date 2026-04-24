@@ -7,8 +7,10 @@ Pytucky 存储引擎
 from __future__ import annotations
 
 import copy
+from functools import wraps
 from pathlib import Path
-from typing import Any, Iterator, Generator, TYPE_CHECKING, Sequence
+from threading import RLock
+from typing import Any, Callable, Concatenate, Generator, Iterator, ParamSpec, TYPE_CHECKING, Sequence, TypeVar
 from contextlib import contextmanager
 
 from ..common.options import PytuckBackendOptions, SyncOptions, SyncResult
@@ -29,6 +31,20 @@ from ..common.exceptions import (
 if TYPE_CHECKING:
     from ..backends.base import StorageBackend
     from .orm import PureBaseModel
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def _storage_locked(
+    method: Callable[Concatenate["Storage", P], R],
+) -> Callable[Concatenate["Storage", P], R]:
+    @wraps(method)
+    def wrapper(self: "Storage", *args: P.args, **kwargs: P.kwargs) -> R:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 class TransactionSnapshot:
     """
@@ -1066,6 +1082,7 @@ class Storage:
         self.auto_flush = auto_flush
         self.tables: dict[str, Table] = {}
         self._dirty = False
+        self._lock = RLock()
 
         # 事务管理属性
         self._in_transaction: bool = False
@@ -1093,6 +1110,7 @@ class Storage:
 
     # ==================== 模型注册表方法 ====================
 
+    @_storage_locked
     def _register_model(self, table_name: str, model_cls: type[PureBaseModel]) -> None:
         """
         注册模型类（按表名）
@@ -1103,6 +1121,7 @@ class Storage:
         """
         self._model_registry[table_name] = model_cls
 
+    @_storage_locked
     def _get_model_by_table(self, table_name: str) -> type[PureBaseModel] | None:
         """
         根据表名获取模型类
@@ -1115,6 +1134,7 @@ class Storage:
         """
         return self._model_registry.get(table_name)
 
+    @_storage_locked
     def create_table(
         self,
         name: str,
@@ -1155,6 +1175,7 @@ class Storage:
         if self.auto_flush:
             self.flush()
 
+    @_storage_locked
     def get_table(self, name: str) -> Table:
         """
         获取表
@@ -1175,6 +1196,7 @@ class Storage:
 
     # ========== Schema 操作方法 ==========
 
+    @_storage_locked
     def sync_table_schema(
         self,
         table_name: str,
@@ -1256,6 +1278,7 @@ class Storage:
 
         return result
 
+    @_storage_locked
     def drop_table(self, table_name: str) -> None:
         """
         删除表（包括所有数据）
@@ -1275,6 +1298,7 @@ class Storage:
         if self.auto_flush:
             self.flush()
 
+    @_storage_locked
     def rename_table(self, old_name: str, new_name: str) -> None:
         """
         重命名表
@@ -1300,6 +1324,7 @@ class Storage:
         if self.auto_flush:
             self.flush()
 
+    @_storage_locked
     def update_table_comment(self, table_name: str, comment: str | None) -> None:
         """
         更新表备注
@@ -1318,6 +1343,7 @@ class Storage:
         if self.auto_flush:
             self.flush()
 
+    @_storage_locked
     def add_column(
         self,
         table_name: str,
@@ -1344,6 +1370,7 @@ class Storage:
         if self.auto_flush:
             self.flush()
 
+    @_storage_locked
     def drop_column(self, table_name: str, column_name: str) -> None:
         """
         从表中删除列
@@ -1367,6 +1394,7 @@ class Storage:
         if self.auto_flush:
             self.flush()
 
+    @_storage_locked
     def update_column(
         self,
         table_name: str,
@@ -1400,6 +1428,7 @@ class Storage:
         if self._dirty and self.auto_flush:
             self.flush()
 
+    @_storage_locked
     def alter_column(
         self,
         table_name: str,
@@ -1432,6 +1461,7 @@ class Storage:
         if self.auto_flush:
             self.flush()
 
+    @_storage_locked
     def set_primary_key(self, table_name: str, column_name: str) -> None:
         """
         修改表的主键
@@ -1452,6 +1482,7 @@ class Storage:
         if self.auto_flush:
             self.flush()
 
+    @_storage_locked
     def reorder_columns(self, table_name: str, new_order: list[str]) -> None:
         """
         重新排列列的顺序
@@ -1471,6 +1502,7 @@ class Storage:
         if self.auto_flush:
             self.flush()
 
+    @_storage_locked
     def insert(self, table_name: str, data: dict[str, Any]) -> Any:
         """
         插入记录
@@ -1492,6 +1524,7 @@ class Storage:
 
         return pk
 
+    @_storage_locked
     def update(self, table_name: str, pk: Any, data: dict[str, Any]) -> None:
         """
         更新记录
@@ -1509,6 +1542,7 @@ class Storage:
         if self.auto_flush:
             self.flush()
 
+    @_storage_locked
     def delete(self, table_name: str, pk: Any) -> None:
         """
         删除记录
@@ -1525,6 +1559,7 @@ class Storage:
         if self.auto_flush:
             self.flush()
 
+    @_storage_locked
     def bulk_insert(self, table_name: str, records: list[dict[str, Any]]) -> list[Any]:
         """
         批量插入记录
@@ -1549,6 +1584,7 @@ class Storage:
 
         return pks
 
+    @_storage_locked
     def bulk_update(self, table_name: str, updates: list[tuple[Any, dict[str, Any]]]) -> int:
         """
         批量更新记录
@@ -1573,6 +1609,7 @@ class Storage:
 
         return count
 
+    @_storage_locked
     def select(self, table_name: str, pk: Any) -> dict[str, Any]:
         """
         查询单条记录
@@ -1593,6 +1630,7 @@ class Storage:
             record_copy[PSEUDO_PK_NAME] = pk
         return record_copy
 
+    @_storage_locked
     def count_rows(self, table_name: str) -> int:
         """
         获取表的记录数
@@ -1610,6 +1648,7 @@ class Storage:
 
         return table.record_count
 
+    @_storage_locked
     def query(self,
               table_name: str,
               conditions: Sequence[ConditionType],
@@ -1822,6 +1861,7 @@ class Storage:
 
             return results
 
+    @_storage_locked
     def query_table_data(self,
                         table_name: str,
                         limit: int | None = None,
@@ -1957,39 +1997,41 @@ class Storage:
             TransactionError: 尝试嵌套事务时
         """
         # 1. 检查嵌套事务
-        if self._in_transaction:
-            raise TransactionError("Nested transactions are not supported")
+        with self._lock:
+            if self._in_transaction:
+                raise TransactionError("Nested transactions are not supported")
 
-        # 2. 进入事务状态
-        self._in_transaction = True
-        self._transaction_snapshot = TransactionSnapshot(self.tables)
-        self._transaction_dirty_flag = self._dirty
+            # 2. 进入事务状态
+            self._in_transaction = True
+            self._transaction_snapshot = TransactionSnapshot(self.tables)
+            self._transaction_dirty_flag = self._dirty
 
-        # 3. 临时禁用 auto_flush
-        old_auto_flush = self.auto_flush
-        self.auto_flush = False
+            # 3. 临时禁用 auto_flush
+            old_auto_flush = self.auto_flush
+            self.auto_flush = False
 
-        try:
-            # 4. 执行事务体
-            yield self
+            try:
+                # 4. 执行事务体
+                yield self
 
-            # 5. 提交成功：恢复 auto_flush 并刷新
-            if old_auto_flush:
-                self.flush()
+                # 5. 提交成功：恢复 auto_flush 并刷新
+                if old_auto_flush:
+                    self.flush()
 
-        except Exception:
-            # 6. 回滚：恢复快照和状态
-            if self._transaction_snapshot:
-                self._transaction_snapshot.restore(self.tables)
-            self._dirty = self._transaction_dirty_flag
-            raise
+            except Exception:
+                # 6. 回滚：恢复快照和状态
+                if self._transaction_snapshot:
+                    self._transaction_snapshot.restore(self.tables)
+                self._dirty = self._transaction_dirty_flag
+                raise
 
-        finally:
-            # 7. 清理：恢复状态
-            self.auto_flush = old_auto_flush
-            self._transaction_snapshot = None
-            self._in_transaction = False
+            finally:
+                # 7. 清理：恢复状态
+                self.auto_flush = old_auto_flush
+                self._transaction_snapshot = None
+                self._in_transaction = False
 
+    @_storage_locked
     def flush(self) -> None:
         """强制写入磁盘"""
         if self.backend and self._dirty:
@@ -2020,6 +2062,7 @@ class Storage:
 
             event.dispatch_storage(self, 'after_flush')
 
+    @_storage_locked
     def close(self) -> None:
         """关闭数据库"""
         self.flush()

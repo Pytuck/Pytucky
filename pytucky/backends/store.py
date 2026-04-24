@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import wraps
 from pathlib import Path
 import struct
-from typing import Any, BinaryIO
+from threading import RLock
+from typing import Any, BinaryIO, Callable, Concatenate, ParamSpec, TypeVar
 
 from ..common.exceptions import (
     ConfigurationError,
@@ -34,6 +36,20 @@ from ..common.crypto import (
     ENCRYPTION_LEVELS,
 )
 from ..common.options import PytuckBackendOptions
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def _store_locked(
+    method: Callable[Concatenate["Store", P], R],
+) -> Callable[Concatenate["Store", P], R]:
+    @wraps(method)
+    def wrapper(self: "Store", *args: P.args, **kwargs: P.kwargs) -> R:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 ROW_LENGTH_STRUCT = struct.Struct("<I")
 U16_STRUCT = struct.Struct("<H")
@@ -78,6 +94,7 @@ class Store:
     def __init__(self, file_path: Path | str, options: PytuckBackendOptions | None = None, *, open_existing: bool = True) -> None:
         self.file_path = Path(file_path)
         self.options = options or PytuckBackendOptions()
+        self._lock = RLock()
         self._tables: dict[str, TableState] = {}
         self._reader: BinaryIO | None = None
         self._cipher: CipherType | None = None
@@ -87,12 +104,14 @@ class Store:
         if open_existing and self.file_path.exists() and self.file_path.is_file() and self.file_path.stat().st_size > 0:
             self.open()
 
+    @_store_locked
     def table_state(self, table_name: str) -> TableState:
         try:
             return self._tables[table_name]
         except KeyError as exc:
             raise TableNotFoundError(table_name) from exc
 
+    @_store_locked
     def create_table(self, name: str, columns: list[Column]) -> None:
         primary_key = None
         for column in columns:
@@ -109,16 +128,19 @@ class Store:
             data_size=0,
         )
 
+    @_store_locked
     def close(self) -> None:
         if self._reader is not None and not self._reader.closed:
             self._reader.close()
         self._reader = None
 
+    @_store_locked
     def _get_reader(self) -> BinaryIO:
         if self._reader is None or self._reader.closed:
             self._reader = self.file_path.open("rb")
         return self._reader
 
+    @_store_locked
     def _read_bytes_at(self, offset: int, size: int) -> bytes:
         reader = self._get_reader()
         reader.seek(offset)
@@ -132,6 +154,7 @@ class Store:
             return self._cipher.decrypt_at(rel_off, data)
         return data
 
+    @_store_locked
     def _read_region(self, offset: int, size: int) -> bytes:
         """Read a region from file, decrypting payload bytes when needed."""
         raw = self._read_bytes_at(offset, size)
@@ -141,6 +164,7 @@ class Store:
             )
         return self._decrypt_region(offset, raw)
 
+    @_store_locked
     def open(self) -> None:
         self.close()
         self._cipher = None
@@ -202,6 +226,7 @@ class Store:
                 tables[ref.name] = state
             self._tables = tables
 
+    @_store_locked
     def select(self, table_name: str, pk: Any) -> dict[str, Any]:
         state = self.table_state(table_name)
         pk = self._normalize_pk(state, pk)
@@ -222,6 +247,7 @@ class Store:
         overlay.row_cache[pk] = record
         return dict(record)
 
+    @_store_locked
     def insert(self, table_name: str, data: dict[str, Any]) -> Any:
         state = self.table_state(table_name)
         pk = self._resolve_insert_pk(state, data)
@@ -234,6 +260,7 @@ class Store:
         state.overlay.row_cache[pk] = record
         return pk
 
+    @_store_locked
     def update(self, table_name: str, pk: Any, data: dict[str, Any]) -> None:
         state = self.table_state(table_name)
         pk = self._normalize_pk(state, pk)
@@ -250,6 +277,7 @@ class Store:
         state.overlay.deleted.discard(pk)
         state.overlay.row_cache[pk] = record
 
+    @_store_locked
     def delete(self, table_name: str, pk: Any) -> None:
         state = self.table_state(table_name)
         pk = self._normalize_pk(state, pk)
@@ -263,6 +291,7 @@ class Store:
         state.overlay.deleted.add(pk)
         state.overlay.row_cache.pop(pk, None)
 
+    @_store_locked
     def flush(self) -> None:
         schema_blobs: dict[str, bytes] = {}
         encoded_tables: dict[str, _EncodedTable] = {}
@@ -962,6 +991,7 @@ class Store:
             return None, offset + U16_STRUCT.size
         return self._unpack_string(blob, offset)
 
+    @_store_locked
     def search_index(self, table_name: str, column_name: str, value: Any) -> list[Any]:
         """在指定表的索引列上查找等值，返回匹配的 pk 列表。合并 overlay 语义：
         - overlay.inserted/updated 的匹配应可见
