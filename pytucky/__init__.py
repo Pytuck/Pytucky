@@ -58,7 +58,7 @@ from .common.exceptions import (
 )
 from .common.options import SyncOptions, SyncResult
 
-__version__ = '1.0.0'
+__version__ = '1.1.0'
 
 __all__ = [
     # ==================== 推荐 API ====================
