@@ -20,10 +20,10 @@ Pytucky 关系预取 API
 
 from __future__ import annotations
 
-from typing import Any, Sequence, overload, TYPE_CHECKING
+from typing import Any, Sequence, TYPE_CHECKING
 
 from ..query.builder import Condition
-from .orm import PureBaseModel, Relationship, PSEUDO_PK_NAME
+from .orm import PureBaseModel, Relationship
 
 if TYPE_CHECKING:
     from .storage import Storage
@@ -128,9 +128,7 @@ def _prefetch_relationship(
     """
     owner_class = type(instances[0])
     target_model = rel._resolve_target_model(owner_class)
-    storage: 'Storage' | None = getattr(owner_class, '__storage__', None)
-    if storage is None:
-        raise ValueError(f"Model '{owner_class.__name__}' is not bound to a Storage")
+    storage = rel._resolve_target_storage(target_model)
 
     target_table: str | None = getattr(target_model, '__tablename__', None)
     if target_table is None:
@@ -143,18 +141,19 @@ def _prefetch_relationship(
     if use_list:
         # 一对多
         _prefetch_one_to_many(
-            instances, storage, target_model, target_table,
+            instances, rel, storage, target_model, target_table,
             primary_key, rel.foreign_key, cache_key
         )
     else:
         # 多对一
         _prefetch_many_to_one(
-            instances, storage, target_model, target_table,
+            instances, rel, storage, target_model, target_table,
             rel.foreign_key, cache_key
         )
 
 def _prefetch_one_to_many(
     instances: Sequence[PureBaseModel],
+    rel: 'Relationship[Any]',
     storage: 'Storage',
     target_model: type[PureBaseModel],
     target_table: str,
@@ -197,7 +196,7 @@ def _prefetch_one_to_many(
     grouped: dict[Any, list[PureBaseModel]] = {}
     for record in records:
         fk_val = record.get(foreign_key)
-        target_instance = _record_to_instance(target_model, record)
+        target_instance = rel._record_to_instance(target_model, record)
         grouped.setdefault(fk_val, []).append(target_instance)
 
     # 4. 写入各 owner 的缓存
@@ -207,6 +206,7 @@ def _prefetch_one_to_many(
 
 def _prefetch_many_to_one(
     instances: Sequence[PureBaseModel],
+    rel: 'Relationship[Any]',
     storage: 'Storage',
     target_model: type[PureBaseModel],
     target_table: str,
@@ -256,7 +256,7 @@ def _prefetch_many_to_one(
     # 3. 按主键建立映射
     pk_map: dict[Any, PureBaseModel] = {}
     for record in records:
-        target_instance = _record_to_instance(target_model, record)
+        target_instance = rel._record_to_instance(target_model, record)
         pk_val = getattr(target_instance, target_pk)
         pk_map[pk_val] = target_instance
 
@@ -265,27 +265,3 @@ def _prefetch_many_to_one(
         fk_val = getattr(inst, foreign_key, None)
         setattr(inst, cache_key, pk_map.get(fk_val))
 
-def _record_to_instance(
-    model_class: type[PureBaseModel],
-    record: dict[str, Any]
-) -> PureBaseModel:
-    """
-    将记录字典转换为模型实例
-
-    参考 _ScalarResult._create_instance 的简化版本，
-    处理 Column.name 到属性名的映射。
-
-    Args:
-        model_class: 模型类
-        record: 记录字典（键为数据库列名）
-
-    Returns:
-        模型实例
-    """
-    mapped: dict[str, Any] = {}
-    for db_col_name, value in record.items():
-        if db_col_name == PSEUDO_PK_NAME:
-            continue
-        attr_name = model_class._column_to_attr_name(db_col_name) or db_col_name
-        mapped[attr_name] = value
-    return model_class(**mapped)

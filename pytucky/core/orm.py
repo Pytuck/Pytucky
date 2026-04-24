@@ -473,7 +473,7 @@ class Column:
         if self.name is None:
             self.name = name
 
-    def __get__(self, instance: 'PureBaseModel' | None, owner: type['PureBaseModel']) -> 'Column' | Any:
+    def __get__(self, instance: 'PureBaseModel | None', owner: type['PureBaseModel']) -> 'Column | Any':
         """
         描述符协议：
         - 类访问（instance=None）：返回 Column 对象（用于查询）
@@ -575,7 +575,7 @@ class PureBaseModel:
 
     # 类属性
     __abstract__: bool = True
-    __storage__: 'Storage' | None = None
+    __storage__: 'Storage | None' = None
     __tablename__: str | None = None
     __table_comment__: str | None = None
     __columns__: dict[str, Column] = {}
@@ -596,7 +596,7 @@ class PureBaseModel:
         这样 session.flush()/commit() 就能检测到修改。
         """
         old_value = None
-        session: 'Session' | None = None
+        session: 'Session | None' = None
 
         if (hasattr(self.__class__, name) and
             isinstance(getattr(self.__class__, name), Column) and
@@ -848,7 +848,7 @@ class CRUDBaseModel(PureBaseModel):
         raise NotImplementedError("This method should be overridden by declarative_base")
 
     @classmethod
-    def get(cls, pk: Any) -> 'CRUDBaseModel' | None:
+    def get(cls, pk: Any) -> 'CRUDBaseModel | None':
         """
         根据主键获取记录
 
@@ -915,7 +915,7 @@ class Relationship(Generic[RelationshipT]):
     def __init__(self,
                  target_model: str | type[PureBaseModel],
                  foreign_key: str,
-                 lazy: bool = True,
+                 storage: 'Storage | None' = None,
                  back_populates: str | None = None,
                  uselist: bool | None = None):
         """
@@ -924,14 +924,14 @@ class Relationship(Generic[RelationshipT]):
         Args:
             target_model: 目标模型类或表名（字符串）
             foreign_key: 外键字段名
-            lazy: 是否延迟加载
+            storage: 目标数据所在的 Storage；None 表示使用目标模型自己的 __storage__
             back_populates: 反向关联的属性名
             uselist: 是否返回列表（None=自动判断，True=强制列表，False=强制单个）
                 - 用于自引用等无法自动判断的场景
         """
         self.target_model = target_model
         self.foreign_key = foreign_key
-        self.lazy = lazy
+        self.storage = storage
         self.back_populates = back_populates
         self._uselist = uselist  # 用户指定的值
         self.is_one_to_many = False  # 自动判断的值
@@ -962,7 +962,7 @@ class Relationship(Generic[RelationshipT]):
         self,
         instance: PureBaseModel | None,
         owner: type[PureBaseModel]
-    ) -> 'Relationship[RelationshipT]' | RelationshipT:
+    ) -> 'Relationship[RelationshipT] | RelationshipT':
         """获取关联对象"""
         if instance is None:
             return self
@@ -974,31 +974,46 @@ class Relationship(Generic[RelationshipT]):
 
         # 延迟加载
         target_model = self._resolve_target_model(owner)
+        target_storage = self._resolve_target_storage(target_model)
 
-        primary_key = getattr(owner, '__primary_key__', 'id')
+        primary_key = getattr(owner, '__primary_key__', None) or PSEUDO_PK_NAME
 
         # 确定是否返回列表：优先使用用户指定的 uselist，否则使用自动判断
         use_list = self._uselist if self._uselist is not None else self.is_one_to_many
+        target_table = getattr(target_model, '__tablename__', None)
+        assert target_table is not None, f"Model {target_model.__name__} must have __tablename__ defined"
 
         if use_list:
             # 一对多：查询外键指向当前实例的所有记录
-            pk_value = getattr(instance, primary_key)
-            # 使用 filter_by（如果目标模型支持）
-            if hasattr(target_model, 'filter_by'):
-                results: PureBaseModel | None | list[PureBaseModel] = target_model.filter_by(**{
-                    self.foreign_key: pk_value
-                }).all()
+            pk_value = getattr(instance, primary_key, None)
+            if pk_value is None:
+                results: PureBaseModel | None | list[PureBaseModel] = []
             else:
-                results = []
+                from ..query.builder import Condition
+                records = target_storage.query(
+                    target_table,
+                    [Condition(self.foreign_key, '=', pk_value)]
+                )
+                results = [
+                    self._record_to_instance(target_model, record)
+                    for record in records
+                ]
         else:
             # 多对一：根据外键值查询目标对象
             fk_value = getattr(instance, self.foreign_key)
+            target_pk = getattr(target_model, '__primary_key__', None)
             if fk_value is None:
                 results = None
-            elif hasattr(target_model, 'get'):
-                results = target_model.get(fk_value)
-            else:
+            elif target_pk is None:
                 results = None
+            else:
+                from ..common.exceptions import RecordNotFoundError
+                try:
+                    record = target_storage.select(target_table, fk_value)
+                except RecordNotFoundError:
+                    results = None
+                else:
+                    results = self._record_to_instance(target_model, record)
 
         # 缓存结果
         setattr(instance, cache_key, results)
@@ -1017,6 +1032,12 @@ class Relationship(Generic[RelationshipT]):
         # 如果不是字符串，直接返回类对象
         if not isinstance(self.target_model, str):
             return self.target_model
+
+        # 显式指定 storage 时，优先从该 storage 的模型注册表解析
+        if self.storage is not None:
+            model = self.storage._get_model_by_table(self.target_model)
+            if model:
+                return cast(type[PureBaseModel], model)
 
         # 使用 owner 或 self.owner
         actual_owner = owner or self.owner
@@ -1041,6 +1062,41 @@ class Relationship(Generic[RelationshipT]):
             f"Cannot find model for '{self.target_model}'. "
             f"Use table name (e.g., 'users') or ensure the model class is defined."
         )
+
+    def _resolve_target_storage(self, target_model: type[PureBaseModel]) -> 'Storage':
+        """解析 relationship 读取时应使用的目标 Storage"""
+        if self.storage is not None:
+            return self.storage
+
+        target_storage = getattr(target_model, '__storage__', None)
+        if target_storage is None:
+            raise ValidationError(
+                f"Target model '{target_model.__name__}' is not bound to a Storage"
+            )
+        return target_storage
+
+    def _record_to_instance(
+        self,
+        model_class: type[PureBaseModel],
+        record: dict[str, Any],
+    ) -> PureBaseModel:
+        """将数据库记录转换为模型实例，并保留已加载状态"""
+        mapped: dict[str, Any] = {}
+        rowid = None
+        for db_col_name, value in record.items():
+            if db_col_name == PSEUDO_PK_NAME:
+                rowid = value
+                continue
+            attr_name = model_class._column_to_attr_name(db_col_name) or db_col_name
+            mapped[attr_name] = value
+
+        instance = model_class(**mapped)
+        pk_name = getattr(model_class, '__primary_key__', None)
+        if rowid is not None and pk_name is None:
+            setattr(instance, '_pytuck_rowid', rowid)
+        if hasattr(instance, '_loaded_from_db'):
+            instance._loaded_from_db = True
+        return instance
 
     def __repr__(self) -> str:
         return f"Relationship(target={self.target_model}, fk={self.foreign_key})"
@@ -1568,7 +1624,7 @@ def _create_crud_base(
             return count
 
         @classmethod
-        def get(cls, pk: Any) -> 'DeclarativeCRUDBase' | None:
+        def get(cls, pk: Any) -> 'DeclarativeCRUDBase | None':
             """根据主键获取记录
 
             注意：无主键模型无法使用此方法，会返回 None。
