@@ -5,6 +5,7 @@ from pathlib import Path
 import importlib
 import importlib.util
 import inspect
+import os
 import sys
 from typing import Any
 
@@ -45,41 +46,72 @@ def _resolve_backend_options_type(options_module: Any) -> type[Any]:
         + ', '.join(candidate.__name__ for candidate in candidates)
     )
 
+def _candidate_pytuck_paths(repo: Path) -> list[Path]:
+    candidates: list[Path] = []
+    env_path = os.environ.get('PYTUCK_REPO_PATH')
+    if env_path:
+        candidates.append(Path(env_path))
+
+    candidates.append(repo.parent / 'pytuck')
+
+    cur = Path(__file__).resolve()
+    for ancestor in [cur] + list(cur.parents):
+        candidates.append(ancestor.parent / 'pytuck')
+
+    unique_candidates: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve(strict=False)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique_candidates.append(candidate)
+    return unique_candidates
+
 def load_pytuck_symbols(repo_root: Path | None = None) -> dict[str, Any]:
-    """Load symbols from a sibling pytuck repository.
+    """Load symbols from installed pytuck or a local pytuck checkout.
 
     Returns a dict with keys: Storage, Column, PytuckBackendOptions, and local pytucky Storage/Column/Options as well.
-    Raises AssertionError with a clear message when sibling repo is missing or import fails.
+    Raises AssertionError with a clear message when pytuck is unavailable or import fails.
     """
     start = Path(__file__) if repo_root is None else Path(repo_root)
     repo = _locate_repo_root(start)
 
-    # prefer sibling at repo.parent / 'pytuck', but also accept other locations in ancestors
     sibling = None
-    cur = Path(__file__).resolve()
-    for ancestor in [cur] + list(cur.parents):
-        cand = ancestor.parent / 'pytuck'
-        if cand.exists():
-            sibling = cand
-            break
-    if sibling is None:
-        raise AssertionError("Cannot locate sibling pytuck repository by searching parent directories.")
-
-    # try to import by manipulating sys.path temporarily
-    sys.path.insert(0, str(sibling))
-    try:
-        spec = importlib.util.find_spec('pytuck')
-        if spec is None:
-            raise AssertionError(f"Found {sibling} but 'pytuck' package not importable")
-        import pytuck as real_pytuck  # type: ignore
-    except Exception as e:
-        raise AssertionError(f"Failed to import real pytuck from {sibling!s}: {e}")
-    finally:
-        try:
-            # remove the inserted path to avoid polluting other imports
+    inserted_path = False
+    spec = importlib.util.find_spec('pytuck')
+    if spec is None:
+        for candidate in _candidate_pytuck_paths(repo):
+            if not candidate.exists():
+                continue
+            sibling = candidate
+            sys.path.insert(0, str(candidate))
+            inserted_path = True
+            spec = importlib.util.find_spec('pytuck')
+            if spec is not None:
+                break
             sys.path.pop(0)
-        except Exception:
-            pass
+            inserted_path = False
+
+    if spec is None:
+        raise AssertionError(
+            "Cannot import 'pytuck'. Install development dependencies with "
+            "`uv sync --extra dev`, or set `PYTUCK_REPO_PATH`, or check out "
+            "https://github.com/Pytuck/Pytuck beside this repository."
+        )
+
+    try:
+        real_pytuck = importlib.import_module('pytuck')
+    except Exception as e:
+        source = str(sibling) if sibling is not None else "installed environment"
+        raise AssertionError(f"Failed to import real pytuck from {source}: {e}")
+    finally:
+        if inserted_path:
+            try:
+                # remove the inserted path to avoid polluting other imports
+                sys.path.pop(0)
+            except Exception:
+                pass
 
     # validate expected exports
     try:
