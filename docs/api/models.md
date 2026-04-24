@@ -285,10 +285,10 @@ from pytucky import Relationship
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `target_model` | str \| Type | 必填 | 目标模型类或表名 |
+| `target_model` | str \| Type | 必填 | 目标模型类，或目标表名字符串 |
 | `foreign_key` | str | 必填 | 外键字段名 |
-| `storage` | Storage \| None | None | 目标数据所在的 Storage；为空时使用目标模型自己的 `__storage__` |
-| `back_populates` | str \| None | None | 反向关联属性名 |
+| `storage` | Storage \| None | None | 仅在字符串目标跨库时需要；省略时默认使用当前模型同库的 `Storage` |
+| `back_populates` | str \| None | None | 反向关联属性名；启用双向定义校验与反向缓存回填 |
 | `uselist` | bool \| None | None | 强制列表/单个（None 自动判断） |
 
 ### 示例
@@ -341,6 +341,9 @@ class UserItem(BaseUser):
 ### 注意事项
 
 - `Relationship` 仍然默认惰性加载，不再提供 `lazy` 参数
+- 字符串目标只表示**表名**，不再回退为类名字符串解析；若要按类绑定，请直接传模型类
+- 字符串目标省略 `storage` 时默认同库；跨库时再显式传 `storage=...`
+- 配置 `back_populates` 后，会校验双向定义是否对称，并在懒加载 / `prefetch()` 后自动回填反向缓存
 - 跨 `Storage` relationship 仅支持读取与 `prefetch()` 预取
 - 仍然不支持 join
 

@@ -7,7 +7,6 @@ Pytucky ORM层
 """
 
 from __future__ import annotations
-import sys
 import json
 import base64
 from typing import Any, Callable, TYPE_CHECKING, overload, Literal, Generic, cast
@@ -974,15 +973,12 @@ class Relationship(Generic[RelationshipT]):
             return cast('Relationship[RelationshipT] | RelationshipT', getattr(instance, cache_key))
 
         # 延迟加载
-        target_model = self._resolve_target_model(owner)
-        target_storage = self._resolve_target_storage(target_model)
+        target_model, target_storage, target_table = self.resolve_binding(owner)
 
         primary_key = getattr(owner, '__primary_key__', None) or PSEUDO_PK_NAME
 
         # 确定是否返回列表：优先使用用户指定的 uselist，否则使用自动判断
         use_list = self._uselist if self._uselist is not None else self.is_one_to_many
-        target_table = getattr(target_model, '__tablename__', None)
-        assert target_table is not None, f"Model {target_model.__name__} must have __tablename__ defined"
 
         if use_list:
             # 一对多：查询外键指向当前实例的所有记录
@@ -1017,10 +1013,38 @@ class Relationship(Generic[RelationshipT]):
                     results = self._record_to_instance(target_model, record)
 
         # 缓存结果
-        setattr(instance, cache_key, results)
+        self._cache_result(instance, results)
         return cast(RelationshipT, results)
 
-    def _resolve_target_model(self, owner: type[PureBaseModel] | None = None) -> type[PureBaseModel]:
+    def resolve_binding(
+        self,
+        owner: type[PureBaseModel] | None = None,
+    ) -> tuple[type[PureBaseModel], 'Storage', str]:
+        """统一解析 relationship 读取所需的模型、storage 与表名。"""
+        actual_owner = owner or self.owner
+        relationship_name = self.name or '<unnamed>'
+
+        if actual_owner is None:
+            raise ValidationError(
+                f"Cannot resolve relationship '{relationship_name}': owner not set"
+            )
+
+        preferred_storage = self.storage or getattr(actual_owner, '__storage__', None)
+        target_model = self._resolve_target_model(
+            actual_owner,
+            preferred_storage=preferred_storage,
+        )
+        target_storage = self._resolve_target_storage(actual_owner, target_model)
+        target_table = self._resolve_target_table(target_model)
+        self._validate_back_populates(actual_owner, target_model)
+        return target_model, target_storage, target_table
+
+    def _resolve_target_model(
+        self,
+        owner: type[PureBaseModel] | None = None,
+        *,
+        preferred_storage: 'Storage | None' = None,
+    ) -> type[PureBaseModel]:
         """
         解析目标模型
 
@@ -1030,51 +1054,148 @@ class Relationship(Generic[RelationshipT]):
         Returns:
             解析后的目标模型类
         """
-        # 如果不是字符串，直接返回类对象
         if not isinstance(self.target_model, str):
+            if self.storage is not None:
+                relationship_name = self.name or '<unnamed>'
+                actual_owner = owner or self.owner
+                owner_name = actual_owner.__name__ if actual_owner is not None else '<unknown>'
+                raise ValidationError(
+                    f"Relationship '{owner_name}.{relationship_name}' cannot set storage= "
+                    "when target_model is a model class. Pass the class directly without storage=."
+                )
             return self.target_model
 
-        # 显式指定 storage 时，优先从该 storage 的模型注册表解析
-        if self.storage is not None:
-            model = self.storage._get_model_by_table(self.target_model)
-            if model:
-                return cast(type[PureBaseModel], model)
-
-        # 使用 owner 或 self.owner
         actual_owner = owner or self.owner
         if actual_owner is None:
             raise ValidationError(
                 f"Cannot resolve model '{self.target_model}': owner not set"
             )
 
-        # 优先从 Storage 注册表按表名查找
-        storage = getattr(actual_owner, '__storage__', None)
-        if storage:
-            model = storage._get_model_by_table(self.target_model)
+        if preferred_storage is not None:
+            model = preferred_storage._get_model_by_table(self.target_model)
             if model:
                 return cast(type[PureBaseModel], model)
 
-        # 回退：从模块命名空间按类名查找（兼容旧用法）
-        owner_module = sys.modules.get(actual_owner.__module__)
-        if owner_module and hasattr(owner_module, self.target_model):
-            return cast(type[PureBaseModel], getattr(owner_module, self.target_model))
-
         raise ValidationError(
-            f"Cannot find model for '{self.target_model}'. "
-            f"Use table name (e.g., 'users') or ensure the model class is defined."
+            f"Cannot resolve relationship target '{self.target_model}' "
+            f"for '{actual_owner.__name__}.{self.name or '<unnamed>'}'. "
+            "String targets are treated as table names only. "
+            "Pass the target model class directly, or use a table name string with the same storage "
+            "or an explicit storage= override."
         )
 
-    def _resolve_target_storage(self, target_model: type[PureBaseModel]) -> 'Storage':
-        """解析 relationship 读取时应使用的目标 Storage"""
+    def _resolve_target_storage(
+        self,
+        owner: type[PureBaseModel],
+        target_model: type[PureBaseModel],
+    ) -> 'Storage':
+        """解析目标 storage，并处理显式 storage 与模型绑定冲突。"""
+        relationship_name = self.name or '<unnamed>'
+        model_storage = getattr(target_model, '__storage__', None)
+
         if self.storage is not None:
+            if model_storage is not None and model_storage is not self.storage:
+                raise ValidationError(
+                    f"Relationship '{owner.__name__}.{relationship_name}' explicitly uses "
+                    "storage=, but the target model is already bound to a different storage. "
+                    "Remove storage= or pass the matching storage."
+                )
             return self.storage
 
-        target_storage = getattr(target_model, '__storage__', None)
-        if target_storage is None:
+        if model_storage is not None:
+            return model_storage
+
+        owner_storage = getattr(owner, '__storage__', None)
+        if owner_storage is not None:
+            return owner_storage
+
+        raise ValidationError(
+            f"Cannot resolve storage for relationship '{owner.__name__}.{relationship_name}'. "
+            "Pass the target model class directly or specify storage=."
+        )
+
+    def _resolve_target_table(self, target_model: type[PureBaseModel]) -> str:
+        """解析目标表名。"""
+        target_table = getattr(target_model, '__tablename__', None)
+        if not target_table:
             raise ValidationError(
-                f"Target model '{target_model.__name__}' is not bound to a Storage"
+                f"Relationship target model '{target_model.__name__}' must define __tablename__"
             )
-        return target_storage
+        return target_table
+
+    def _validate_back_populates(
+        self,
+        owner: type[PureBaseModel],
+        target_model: type[PureBaseModel],
+    ) -> None:
+        """校验 back_populates 是否形成合法的双向关系定义。"""
+        if self.back_populates is None:
+            return
+
+        relationship_name = self.name or '<unnamed>'
+        target_relationships = getattr(target_model, '__relationships__', {})
+        reverse_rel = target_relationships.get(self.back_populates)
+        if reverse_rel is None:
+            raise ValidationError(
+                f"Relationship '{owner.__name__}.{relationship_name}' declares "
+                f"back_populates='{self.back_populates}', but "
+                f"'{target_model.__name__}.{self.back_populates}' does not exist."
+            )
+
+        if reverse_rel.back_populates != relationship_name:
+            raise ValidationError(
+                f"Relationship '{owner.__name__}.{relationship_name}' expects "
+                f"'{target_model.__name__}.{self.back_populates}' to declare "
+                f"back_populates='{relationship_name}', got {reverse_rel.back_populates!r}."
+            )
+
+        reverse_use_list = reverse_rel._uselist if reverse_rel._uselist is not None else reverse_rel.is_one_to_many
+        current_use_list = self._uselist if self._uselist is not None else self.is_one_to_many
+        if reverse_use_list == current_use_list:
+            raise ValidationError(
+                f"Relationship '{owner.__name__}.{relationship_name}' and "
+                f"'{target_model.__name__}.{self.back_populates}' must point in opposite directions."
+            )
+
+    def _cache_result(
+        self,
+        instance: PureBaseModel,
+        results: PureBaseModel | None | list[PureBaseModel],
+    ) -> None:
+        """写入当前关系缓存，并回填 back_populates 对应的反向缓存。"""
+        cache_key = f'_cached_{self.name}'
+        setattr(instance, cache_key, results)
+
+        if self.back_populates is None or results is None:
+            return
+
+        related_instances = results if isinstance(results, list) else [results]
+        for related_instance in related_instances:
+            self._cache_reverse_relationship(related_instance, instance)
+
+    def _cache_reverse_relationship(
+        self,
+        related_instance: PureBaseModel,
+        owner_instance: PureBaseModel,
+    ) -> None:
+        """将当前关系结果回填到 back_populates 对应的反向缓存。"""
+        if self.back_populates is None:
+            return
+
+        reverse_rel = type(related_instance).__relationships__.get(self.back_populates)
+        if reverse_rel is None:
+            return
+
+        reverse_cache_key = f'_cached_{self.back_populates}'
+        reverse_use_list = reverse_rel._uselist if reverse_rel._uselist is not None else reverse_rel.is_one_to_many
+        if reverse_use_list:
+            existing = getattr(related_instance, reverse_cache_key, None)
+            if existing is None:
+                setattr(related_instance, reverse_cache_key, [owner_instance])
+            elif owner_instance not in existing:
+                existing.append(owner_instance)
+        else:
+            setattr(related_instance, reverse_cache_key, owner_instance)
 
     def _record_to_instance(
         self,
