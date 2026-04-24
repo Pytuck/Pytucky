@@ -1,70 +1,71 @@
 # Changelog
 
-## 1.0.0 (2026-04-14)
+## 1.1.0 (2026-04-24)
 
-首个正式版本。从 pytuck v1.0.0 fork 并重构为 PTK7 单引擎库。
+这是 `v1.0.0` 之后的首个小版本汇总发布，覆盖从 `v1.0.0` 的主要能力演进与兼容性收敛。
 
-### 架构
+### 新增
 
-- 从 pytuck 多引擎架构（8 种引擎）收敛到 **PTK7 单引擎**
-- 移除多引擎注册机制（BackendRegistry）、native-SQL、connectors
-- 移除 PTK5 / PTK6 后端及迁移工具
-- 移除 WAL 残留和过时选项（lazy_load、sidecar_wal、encryption 等）
-- 精简 StorageBackend 基类为最小抽象接口
+- **PTK7 三档加密与 pytuck 互通**
+  - 增加 `low / medium / high` 三档加密支持
+  - 保持与 pytuck 的 PTK7 文件互读互写路径
+  - 加密文件的 reopen、lazy index 与范围查询路径已补齐验证
 
-### 性能
+- **Relationship 支持显式指定目标 `Storage`**
+  - `Relationship(..., storage=base_db)` 现在可以把关系读取定向到另一份数据库文件
+  - 支持典型的“基础库只读 + 用户库动态写入”模型组织方式
+  - 不要求两个数据库文件使用相同引擎，只依赖统一的 `Storage` 抽象接口
 
-与 Pytuck 1.2.1 同机、同 schema 对比（100,000 条记录）：
+- **跨 `Storage` 预取支持**
+  - `prefetch()` 现在会跟随 relationship 的目标 `Storage` 做批量查询
+  - `select(...).options(prefetch(...))` 同步支持跨库 relationship
 
-| 指标 | Pytucky 1.0.0 | Pytuck 1.2.1 | 变化 |
-|------|---------------|--------------|------|
-| insert | 800ms | 781ms | +2.5% |
-| save | 592ms | 597ms | -0.8% |
-| query_indexed | 1.79ms | 1.72ms | +3.5% |
-| load | 123ms | 132ms | **-7.3%** |
-| file_size | 9.97MB | 9.97MB | 0% |
+- **Storage / Session 线程安全保护**
+  - 为 `Storage` 与 `Session` 的关键操作增加线程锁保护
+  - 补齐共享 `Storage` 插入、`auto_flush` 保存、共享 `Session.add()` 的并发保护测试
 
-两个库共享 PTK7 格式，相同 schema 下文件体积一致，性能基本持平。
+### 变更
 
-具体优化项：
+- **单引擎 PTK7 路径继续收敛**
+  - 统一后端选项命名并清理单引擎残留接口
+  - 继续压缩与多引擎时代相关的遗留复杂度，公开层保持当前 PTK7 单格式叙事
 
-- **索引物化缓存**：HashIndexProxy / SortedIndexProxy 首次 lookup 时物化索引到内存，后续查询零解码开销
-- **增量 flush**：只写入有变更的表，未改动的表跳过物化
-- **复用读句柄**：同一 Store 实例内复用文件句柄
-- **Session 批量插入**：`flush()` 按模型类分组走 `bulk_insert`，替代逐条 `insert` + readback
-- **add O(1) 去重**：`session.add()` 使用 id-based set 替代列表扫描
-- **materialize 批量读取**：单次 `_read_bytes_at()` + 内存切片替代逐行 seek+read
-- **decode_row codecs 缓存**：避免每行每列重复查找编解码器
-- **其他**：移除 fsync、未改表字节直通、消除 `_offset_map` 冗余字典
+- **清理无效的 relationship 参数**
+  - 删除 `Relationship.lazy` 参数
+  - relationship 继续默认保持惰性读取，批量加载统一通过 `prefetch()` 完成
 
-### PTK7 格式
+- **类型系统与开发环境收敛**
+  - 清理静态类型隐患并打通 mypy 路径
+  - 类型注解语法与开发文档对齐到当前 Python 版本要求
+  - 若干初始化参数改为更明确的关键字语义，减少误用空间
 
-- 默认按需读取：打开文件时只恢复文件头、schema、PK 目录和索引元数据
-- 主键直达读取：`pk → (offset, length)` 直接定位记录
-- 索引按需读取：索引元数据在打开时恢复，索引块在查询时再读取
-- lazy flush overlay：reopen 后少量更新只构造 overlay，不需全表物化
+- **公开文档与版本号同步到 1.1.0**
+  - README、API 参考与 benchmark 版本号已统一升级
+  - 常规文档现在直接陈述当前能力，不再把“本次更新内容”混入正文结构
+  - 新增跨 `Storage` relationship / `prefetch()` 的当前用法示例
 
-### ORM
+### 约束
 
-- 保留 pytuck 核心 API：Column、declarative_base、Session、select/insert/update/delete
-- 保留 PureBaseModel + CRUDBaseModel 两种模式
-- 保留 Relationship 延迟加载
-- 保留事件系统（before/after_insert/update/delete/flush）
-- 保留 Schema 同步（sync_schema、add_column、drop_column、alter_column 等）
+- 仍然**不支持 join**
+- relationship 的跨库能力仅用于**读取与预取**
+- 不提供跨多个 `Storage` 的原子事务语义
+
+### 修复
+
+- **read_lazy_record offset 映射读取修正**
+  - 修复按 offset 映射读取记录时的主键定位问题
+  - 避免 reopen 后 lazy 读取路径出现记录映射错误
+
+- **多个已确认缺陷修复**
+  - `v1.0.0` 后已合并一轮已确认问题修复
+  - 同步补上了对应的回归测试覆盖
 
 ### 测试
 
-- 65 个测试全部通过
-- 覆盖 unit / feature / system / recovery 层级
+- 测试规模从 `65` 项扩展到 `179` 项
+- 新增 PTK7 加密、跨库 relationship、跨库 `prefetch()`、线程安全、查询与类型系统等回归覆盖
+- 全量测试通过：`179 passed`
 
-### 迁移
+### 历史归档
 
-从 pytuck 迁移只需更改 import：
-
-```python
-# 之前
-from pytuck import Storage, declarative_base, Session, Column
-
-# 之后
-from pytucky import Storage, declarative_base, Session, Column
-```
+- [1.0.0](docs/changelog/1.0.0.md)

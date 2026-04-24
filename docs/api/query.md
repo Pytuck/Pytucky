@@ -191,8 +191,10 @@ from pytucky import Result, CursorResult
 ```python
 from pytucky import prefetch, select
 
-stmt = select(User).options(prefetch(User.orders))
+stmt = select(User).options(prefetch('orders'))
 result = session.execute(stmt)
 users = result.all()
 # users[0].orders 已预加载，不会触发延迟查询
 ```
+
+如果 relationship 定义了 `storage=...`，`prefetch()` 会自动在该目标 `Storage` 上批量查询，因此同样适用于跨库 relationship。
