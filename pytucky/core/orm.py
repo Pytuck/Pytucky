@@ -915,6 +915,7 @@ class Relationship(Generic[RelationshipT]):
     def __init__(self,
                  target_model: str | type[PureBaseModel],
                  foreign_key: str,
+                 *,
                  storage: 'Storage | None' = None,
                  back_populates: str | None = None,
                  uselist: bool | None = None):
