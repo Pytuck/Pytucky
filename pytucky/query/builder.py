@@ -285,7 +285,7 @@ ConditionType = Condition | CompositeCondition
 class Query(Generic[T]):
     """查询构建器（支持链式调用）"""
 
-    def __init__(self, model_class: type[T], storage: 'Storage' | None = None) -> None:
+    def __init__(self, model_class: type[T], storage: 'Storage | None' = None) -> None:
         """
         初始化查询构建器
 
@@ -485,7 +485,7 @@ class Query(Generic[T]):
             记录字典列表
         """
         # 获取 storage 实例（新 API 优先，兼容旧 API）
-        storage: 'Storage' | None = (
+        storage: 'Storage | None' = (
             self.storage or
             getattr(self.model_class, '__storage__', None) or
             getattr(self.model_class, '_db', None)

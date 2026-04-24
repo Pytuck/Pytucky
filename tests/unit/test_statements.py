@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
-
-import pytest
-
 from pytucky import Storage, declarative_base, Session, Column, select, insert, update, delete
 
 def make_storage(tmp_path: Path) -> Storage:

@@ -1,5 +1,3 @@
-import pytest
-
 from pytucky.backends.format import FileHeader, CryptoMetadataV7, CRYPTO_META_STRUCT
 
 

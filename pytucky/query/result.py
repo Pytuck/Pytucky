@@ -22,7 +22,7 @@ class _ScalarResult(Generic[T]):
     负责将查询结果字典转换为模型实例，并处理 identity map。
     """
 
-    def __init__(self, records: list[dict[str, Any]], model_class: type[T], session: 'Session' | None = None) -> None:
+    def __init__(self, records: list[dict[str, Any]], model_class: type[T], session: 'Session | None' = None) -> None:
         self._records = records
         self._model_class = model_class
         self._session = session
@@ -138,7 +138,7 @@ class Result(Generic[T]):
         _session: Session 实例，用于 identity map 管理
     """
 
-    def __init__(self, records: list[dict[str, Any]], model_class: type[T], operation: str = 'select', session: 'Session' | None = None, options: list[Any] | None = None) -> None:
+    def __init__(self, records: list[dict[str, Any]], model_class: type[T], operation: str = 'select', session: 'Session | None' = None, options: list[Any] | None = None) -> None:
         """
         Args:
             records: 查询结果（字典列表）

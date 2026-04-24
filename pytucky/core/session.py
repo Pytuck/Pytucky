@@ -15,7 +15,7 @@ from typing import Any, Callable, Concatenate, Generator, ParamSpec, TypeVar, ov
 from ..common.typing import T
 from ..common.exceptions import QueryError, RecordNotFoundError, TransactionError, ValidationError
 from ..common.options import SyncOptions, SyncResult
-from ..query.builder import Query, BinaryExpression
+from ..query.builder import Query
 from ..query.result import Result, CursorResult
 from ..query.statements import Statement, Insert, Select, Update, Delete
 from .storage import Storage

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from pytucky import Column, Storage, declarative_base
+from pytucky import Storage
 from tests.helpers.factories import build_user_storage
 
 

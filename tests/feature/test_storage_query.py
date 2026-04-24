@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from pytucky import Storage, declarative_base, Session, Column, select
+from pytucky import Storage, declarative_base, Column
 from pytucky.query.builder import Condition, or_
 
 
@@ -38,7 +38,7 @@ def test_index_equality_query_acceleration(tmp_path: Path) -> None:
 @pytest.mark.feature
 def test_sorted_index_range_query(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "sorted-range.pytucky")
-    Base: Type = declarative_base(db)
+    Base = declarative_base(db)
 
     class Item(Base):
         __tablename__ = "items"
@@ -65,7 +65,7 @@ def test_sorted_index_range_query(tmp_path: Path) -> None:
 @pytest.mark.feature
 def test_none_value_ordering_ascending_and_descending(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "none-order.pytucky")
-    Base: Type = declarative_base(db)
+    Base = declarative_base(db)
 
     class Thing(Base):
         __tablename__ = "things"
@@ -104,7 +104,7 @@ def test_none_value_ordering_ascending_and_descending(tmp_path: Path) -> None:
 @pytest.mark.feature
 def test_multi_condition_intersection(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "multi-cond.pytucky")
-    Base: Type = declarative_base(db)
+    Base = declarative_base(db)
 
     class Record(Base):
         __tablename__ = "records"
@@ -130,7 +130,7 @@ def test_multi_condition_intersection(tmp_path: Path) -> None:
 @pytest.mark.feature
 def test_offset_limit_pagination(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "pagination.pytucky")
-    Base: Type = declarative_base(db)
+    Base = declarative_base(db)
 
     class P(Base):
         __tablename__ = "pages"
@@ -154,7 +154,7 @@ def test_offset_limit_pagination(tmp_path: Path) -> None:
 @pytest.mark.feature
 def test_query_with_or_composite_condition(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "or-cond.pytucky")
-    Base: Type = declarative_base(db)
+    Base = declarative_base(db)
 
     class User(Base):
         __tablename__ = "users_or"

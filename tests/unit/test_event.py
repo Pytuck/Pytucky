@@ -1,6 +1,6 @@
 import pytest
 
-from pytucky.core.event import EventManager, MODEL_EVENTS, STORAGE_EVENTS
+from pytucky.core.event import EventManager
 
 
 class DummyModel:

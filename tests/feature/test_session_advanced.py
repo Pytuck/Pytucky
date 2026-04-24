@@ -4,7 +4,7 @@ import pytest
 
 from pytucky import Column, Session, Storage, declarative_base, insert, select
 from pytucky.core.event import event
-from pytucky.common.exceptions import TransactionError, RecordNotFoundError
+from pytucky.common.exceptions import TransactionError
 
 
 @pytest.mark.feature
@@ -51,7 +51,7 @@ def test_flush_triggers_before_after_insert(tmp_path: Path) -> None:
 @pytest.mark.feature
 def test_flush_handles_dirty_update(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "session-dirty.pytucky")
-    Base: Type = declarative_base(db)
+    Base = declarative_base(db)
 
     class User(Base):
         __tablename__ = "users"
@@ -85,7 +85,7 @@ def test_flush_handles_dirty_update(tmp_path: Path) -> None:
 @pytest.mark.feature
 def test_merge_new_object(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "session-merge-new.pytucky")
-    Base: Type = declarative_base(db)
+    Base = declarative_base(db)
 
     class Item(Base):
         __tablename__ = "items"
@@ -116,7 +116,7 @@ def test_merge_new_object(tmp_path: Path) -> None:
 @pytest.mark.feature
 def test_merge_existing_object_updates_identity_map(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "session-merge-existing.pytucky")
-    Base: Type = declarative_base(db)
+    Base = declarative_base(db)
 
     class Item(Base):
         __tablename__ = "items"
@@ -156,7 +156,7 @@ def test_merge_existing_object_updates_identity_map(tmp_path: Path) -> None:
 @pytest.mark.feature
 def test_bulk_insert_and_bulk_update(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "session-bulk.pytucky")
-    Base: Type = declarative_base(db)
+    Base = declarative_base(db)
 
     class Product(Base):
         __tablename__ = "products"
@@ -197,7 +197,7 @@ def test_bulk_insert_and_bulk_update(tmp_path: Path) -> None:
 @pytest.mark.feature
 def test_begin_rollback_and_nesting(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "session-tx.pytucky")
-    Base: Type = declarative_base(db)
+    Base = declarative_base(db)
 
     class User(Base):
         __tablename__ = "users"
@@ -238,7 +238,7 @@ def test_begin_rollback_and_nesting(tmp_path: Path) -> None:
 @pytest.mark.feature
 def test_get_behaviour_for_missing_and_error_propagation(tmp_path: Path, monkeypatch) -> None:
     db = Storage(file_path=tmp_path / "session-get.pytucky")
-    Base: Type = declarative_base(db)
+    Base = declarative_base(db)
 
     class User(Base):
         __tablename__ = "users"
