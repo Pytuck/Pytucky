@@ -127,12 +127,7 @@ def _prefetch_relationship(
         rel_name: 关系属性名
     """
     owner_class = type(instances[0])
-    target_model = rel._resolve_target_model(owner_class)
-    storage = rel._resolve_target_storage(target_model)
-
-    target_table: str | None = getattr(target_model, '__tablename__', None)
-    if target_table is None:
-        raise ValueError(f"Target model has no __tablename__")
+    target_model, storage, target_table = rel.resolve_binding(owner_class)
 
     primary_key = getattr(owner_class, '__primary_key__', None) or '_pytuck_rowid'
     use_list = rel._uselist if rel._uselist is not None else rel.is_one_to_many
@@ -185,7 +180,7 @@ def _prefetch_one_to_many(
 
     if not pk_values:
         for inst in instances:
-            setattr(inst, cache_key, [])
+            rel._cache_result(inst, [])
         return
 
     # 2. 单次批量查询
@@ -202,7 +197,7 @@ def _prefetch_one_to_many(
     # 4. 写入各 owner 的缓存
     for inst in instances:
         pk_val = getattr(inst, pk_attr, None)
-        setattr(inst, cache_key, grouped.get(pk_val, []))
+        rel._cache_result(inst, grouped.get(pk_val, []))
 
 def _prefetch_many_to_one(
     instances: Sequence[PureBaseModel],
@@ -238,7 +233,7 @@ def _prefetch_many_to_one(
 
     if not fk_values:
         for inst in instances:
-            setattr(inst, cache_key, None)
+            rel._cache_result(inst, None)
         return
 
     # 2. 查询目标表
@@ -263,5 +258,5 @@ def _prefetch_many_to_one(
     # 4. 写入缓存
     for inst in instances:
         fk_val = getattr(inst, foreign_key, None)
-        setattr(inst, cache_key, pk_map.get(fk_val))
+        rel._cache_result(inst, pk_map.get(fk_val))
 

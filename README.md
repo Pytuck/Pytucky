@@ -165,6 +165,11 @@ finally:
     base_db.close()
 ```
 
+说明：
+- `Relationship("base_items", ...)` 里的字符串表示**表名**
+- 字符串目标省略 `storage` 时默认同库；跨库读取时再显式传 `storage=...`
+- 配置 `back_populates` 后，懒加载和 `prefetch()` 都会自动回填反向缓存
+
 ## 性能（100,000 条记录）
 
 与 Pytuck 1.2.1 同机、同 schema 对比（Linux / Python 3.12.3）：

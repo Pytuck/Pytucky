@@ -82,6 +82,116 @@ def test_relationship_caching(tmp_path: Path) -> None:
 
 
 @pytest.mark.feature
+def test_back_populates_populates_reverse_cache_on_many_to_one(tmp_path: Path) -> None:
+    db = Storage(file_path=tmp_path / "rel-back-populates-many-to-one.pytucky")
+    Base: Type = declarative_base(db, crud=True)
+
+    class Author(Base):
+        __tablename__ = "authors"
+        id = Column(int, primary_key=True)
+        name = Column(str)
+        books = Relationship("books", foreign_key="author_id", back_populates="author")
+
+    class Book(Base):
+        __tablename__ = "books"
+        id = Column(int, primary_key=True)
+        title = Column(str)
+        author_id = Column(int)
+        author = Relationship("authors", foreign_key="author_id", back_populates="books")
+
+    try:
+        author = Author.create(name="Alice")
+        book = Book.create(title="Book1", author_id=author.id)
+
+        loaded_book = Book.get(book.id)
+        assert loaded_book is not None
+        loaded_author = loaded_book.author
+
+        assert loaded_author is not None
+        assert hasattr(loaded_author, "_cached_books")
+        assert len(loaded_author._cached_books) == 1
+        assert loaded_author._cached_books[0] is loaded_book
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+@pytest.mark.feature
+def test_back_populates_populates_reverse_cache_on_one_to_many_prefetch(tmp_path: Path) -> None:
+    db = Storage(file_path=tmp_path / "rel-back-populates-prefetch.pytucky")
+    Base: Type = declarative_base(db, crud=True)
+
+    class Author(Base):
+        __tablename__ = "authors"
+        id = Column(int, primary_key=True)
+        name = Column(str)
+        books = Relationship("books", foreign_key="author_id", back_populates="author")
+
+    class Book(Base):
+        __tablename__ = "books"
+        id = Column(int, primary_key=True)
+        title = Column(str)
+        author_id = Column(int)
+        author = Relationship("authors", foreign_key="author_id", back_populates="books")
+
+    try:
+        author = Author.create(name="Bob")
+        Book.create(title="B1", author_id=author.id)
+        Book.create(title="B2", author_id=author.id)
+
+        loaded_author = Author.get(author.id)
+        assert loaded_author is not None
+
+        prefetch([loaded_author], "books")
+
+        assert hasattr(loaded_author, "_cached_books")
+        assert len(loaded_author._cached_books) == 2
+        for loaded_book in loaded_author._cached_books:
+            assert hasattr(loaded_book, "_cached_author")
+            assert loaded_book._cached_author is loaded_author
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+@pytest.mark.feature
+def test_back_populates_requires_symmetric_definition(tmp_path: Path) -> None:
+    db = Storage(file_path=tmp_path / "rel-back-populates-invalid.pytucky")
+    Base: Type = declarative_base(db, crud=True)
+
+    class Author(Base):
+        __tablename__ = "authors"
+        id = Column(int, primary_key=True)
+        name = Column(str)
+        books = Relationship("books", foreign_key="author_id", back_populates="writer")
+
+    class Book(Base):
+        __tablename__ = "books"
+        id = Column(int, primary_key=True)
+        title = Column(str)
+        author_id = Column(int)
+        author = Relationship("authors", foreign_key="author_id", back_populates="books")
+
+    try:
+        author = Author.create(name="Carol")
+        Book.create(title="Broken", author_id=author.id)
+        loaded_author = Author.get(author.id)
+        assert loaded_author is not None
+
+        with pytest.raises(Exception, match="back_populates|writer|books"):
+            _ = loaded_author.books
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+@pytest.mark.feature
 def test_prefetch_option_and_immediate_mode(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "rel-prefetch.pytucky")
     Base: Type = declarative_base(db, crud=True)
@@ -124,6 +234,37 @@ def test_prefetch_option_and_immediate_mode(tmp_path: Path) -> None:
         assert isinstance(a1._cached_books, list)
         assert len(a1._cached_books) == 2
         assert a2._cached_books == []
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+@pytest.mark.feature
+def test_relationship_string_target_is_table_name_only(tmp_path: Path) -> None:
+    db = Storage(file_path=tmp_path / "rel-string-table-only.pytucky")
+    Base: Type = declarative_base(db, crud=True)
+
+    class User(Base):
+        __tablename__ = "users"
+        id = Column(int, primary_key=True)
+        name = Column(str)
+
+    class Order(Base):
+        __tablename__ = "orders"
+        id = Column(int, primary_key=True)
+        user_id = Column(int)
+        user = Relationship("User", foreign_key="user_id")  # type: ignore[arg-type]
+
+    try:
+        user = User.create(name="WrongString")
+        order = Order.create(user_id=user.id)
+        loaded_order = Order.get(order.id)
+        assert loaded_order is not None
+
+        with pytest.raises(Exception, match="table name|String targets|User"):
+            _ = loaded_order.user
     finally:
         try:
             db.close()
