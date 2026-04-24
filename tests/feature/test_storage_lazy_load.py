@@ -117,6 +117,59 @@ def test_read_lazy_record_rebuilds_missing_offset_mapping(tmp_path: Path) -> Non
         reopened.close()
 
 
+@pytest.mark.feature
+def test_read_lazy_record_prefers_offset_mapping_over_passed_pk(tmp_path: Path) -> None:
+    db_path = tmp_path / "lazy-offset-prefer-offset.pytucky"
+    storage = build_user_storage(db_path)
+    storage.insert("users", {"id": 1, "name": "Alice", "age": 20})
+    storage.insert("users", {"id": 2, "name": "Bob", "age": 30})
+    storage.flush()
+    storage.close()
+
+    reopened = Storage(file_path=str(db_path))
+    try:
+        table = reopened.get_table("users")
+        backend = reopened.backend
+        assert backend is not None
+        offset = table._pk_offsets[1]
+
+        backend._rebuild_offset_map()
+        record = backend.read_lazy_record(db_path, offset, table.columns, 2)
+
+        assert record["name"] == "Alice"
+        assert record["id"] == 1
+    finally:
+        reopened.close()
+
+
+@pytest.mark.feature
+def test_read_lazy_record_rebuilds_offset_mapping_by_offset_not_passed_pk(tmp_path: Path) -> None:
+    db_path = tmp_path / "lazy-offset-rebuild-by-offset.pytucky"
+    storage = build_user_storage(db_path)
+    storage.insert("users", {"id": 1, "name": "Alice", "age": 20})
+    storage.insert("users", {"id": 2, "name": "Bob", "age": 30})
+    storage.flush()
+    storage.close()
+
+    reopened = Storage(file_path=str(db_path))
+    try:
+        table = reopened.get_table("users")
+        backend = reopened.backend
+        assert backend is not None
+        offset = table._pk_offsets[1]
+
+        backend._rebuild_offset_map()
+        backend._offset_map.pop(offset, None)
+
+        record = backend.read_lazy_record(db_path, offset, table.columns, 2)
+
+        assert record["name"] == "Alice"
+        assert record["id"] == 1
+        assert backend._offset_map[offset] == ("users", 1)
+    finally:
+        reopened.close()
+
+
 def test_flush_only_materializes_changed_table_among_many(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """确保在存在多张 lazy 表且只修改其中一张时，flush 不会对未修改的表进行 materialize/scan。
 

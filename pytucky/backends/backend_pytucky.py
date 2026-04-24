@@ -349,17 +349,17 @@ class PytuckyBackend(StorageBackend):
             entry = self._offset_map.get(offset)
             if entry is None:
                 for tname, state in self.store._tables.items():
-                    if pk in state.pk_index:
-                        entry = (tname, pk)
-                        self._offset_map[offset] = entry
+                    for candidate_pk, (candidate_offset, _length) in state.pk_index.items():
+                        if candidate_offset == offset:
+                            entry = (tname, candidate_pk)
+                            self._offset_map[offset] = entry
+                            break
+                    if entry is not None:
                         break
             if entry is None:
                 raise KeyError(f'Offset {offset} not known')
             resolved_table, resolved_pk = entry
-            try:
-                return self.store.select(resolved_table, pk)
-            except Exception:
-                return self.store.select(resolved_table, resolved_pk)
+            return self.store.select(resolved_table, resolved_pk)
         except Exception as exc:
             raise SerializationError(f'V7 read lazy record failed: {exc}') from exc
 
