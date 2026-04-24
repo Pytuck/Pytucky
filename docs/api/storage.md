@@ -13,6 +13,7 @@ Storage(
     file_path: str | Path | None = None,
     in_memory: bool = False,
     auto_flush: bool = False,
+    backend_options: PytuckBackendOptions | None = None,
 )
 ```
 
@@ -21,21 +22,32 @@ Storage(
 | `file_path` | 数据文件路径（None 表示纯内存） |
 | `in_memory` | 是否纯内存模式 |
 | `auto_flush` | 每次写操作后是否自动刷盘 |
+| `backend_options` | PTK7 后端配置对象，使用 `PytuckBackendOptions` 指定加密参数 |
 
 ### 示例
 
 ```python
 # 文件模式
-db = Storage(file_path='mydb.pytucky')
+db = Storage(file_path='mydb.pytuck')
 
 # 纯内存
 db = Storage(in_memory=True)
 
 # 自动刷盘
-db = Storage(file_path='mydb.pytucky', auto_flush=True)
+db = Storage(file_path='mydb.pytuck', auto_flush=True)
+
+# 加密配置
+from pytucky.common.options import PytuckBackendOptions
+
+db = Storage(
+    file_path='secure.pytuck',
+    backend_options=PytuckBackendOptions(encryption='high', password='secret123'),
+)
 ```
 
 如果 `file_path` 指向已存在的文件，构造时自动加载数据。
+
+PTK7 文件默认后缀为 `.pytuck`；项目包名虽然是 `pytucky`，但如果显式传入 `.pytucky` 文件名也仍然兼容。
 
 ---
 
@@ -44,7 +56,7 @@ db = Storage(file_path='mydb.pytucky', auto_flush=True)
 ### insert
 
 ```python
-def insert(self, table_name: str, data: Dict[str, Any]) -> Any
+def insert(self, table_name: str, data: dict[str, Any]) -> Any
 ```
 
 插入一条记录，返回主键值。
@@ -56,7 +68,7 @@ pk = db.insert('users', {'name': 'Alice', 'age': 20})
 ### select
 
 ```python
-def select(self, table_name: str, pk: Any) -> Dict[str, Any]
+def select(self, table_name: str, pk: Any) -> dict[str, Any]
 ```
 
 通过主键查询单条记录。
@@ -69,7 +81,7 @@ record = db.select('users', 1)
 ### update
 
 ```python
-def update(self, table_name: str, pk: Any, data: Dict[str, Any]) -> None
+def update(self, table_name: str, pk: Any, data: dict[str, Any]) -> None
 ```
 
 更新一条记录。
@@ -93,7 +105,7 @@ db.delete('users', 1)
 ### bulk_insert
 
 ```python
-def bulk_insert(self, table_name: str, records: List[Dict[str, Any]]) -> List[Any]
+def bulk_insert(self, table_name: str, records: list[dict[str, Any]]) -> list[Any]
 ```
 
 批量插入记录，返回主键列表。
@@ -106,7 +118,7 @@ pks = db.bulk_insert('users', records)
 ### bulk_update
 
 ```python
-def bulk_update(self, table_name: str, updates: List[Tuple[Any, Dict[str, Any]]]) -> int
+def bulk_update(self, table_name: str, updates: list[tuple[Any, dict[str, Any]]]) -> int
 ```
 
 批量更新记录，返回更新数。
@@ -127,7 +139,7 @@ def query(
     offset: int = 0,
     order_by: str | None = None,
     order_desc: bool = False,
-) -> List[Dict[str, Any]]
+) -> list[dict[str, Any]]
 ```
 
 条件查询多条记录。自动利用索引优化等值和范围查询。
@@ -150,7 +162,7 @@ def count_rows(self, table_name: str) -> int
 def create_table(
     self,
     name: str,
-    columns: List[Column],
+    columns: list[Column],
     comment: str | None = None,
 ) -> None
 ```
@@ -190,7 +202,7 @@ def get_table(self, name: str) -> Table
 ### tables 属性
 
 ```python
-db.tables  # Dict[str, Table]
+db.tables  # dict[str, Table]
 ```
 
 ---
@@ -240,7 +252,7 @@ def set_primary_key(self, table_name: str, column_name: str) -> None
 ### reorder_columns
 
 ```python
-def reorder_columns(self, table_name: str, new_order: List[str]) -> None
+def reorder_columns(self, table_name: str, new_order: list[str]) -> None
 ```
 
 ### sync_table_schema
@@ -249,7 +261,7 @@ def reorder_columns(self, table_name: str, new_order: List[str]) -> None
 def sync_table_schema(
     self,
     table_name: str,
-    columns: List[Column],
+    columns: list[Column],
     comment: str | None = None,
     options: SyncOptions | None = None,
 ) -> SyncResult

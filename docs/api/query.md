@@ -34,10 +34,10 @@ stmt = select(User).limit(10).offset(20)
 ```python
 result = session.execute(select(User).where(User.age >= 18))
 
-users = result.all()         # List[User]
-user = result.first()        # Optional[User]
+users = result.all()         # list[User]
+user = result.first()        # User | None
 user = result.one()          # User（无结果或多结果抛异常）
-user = result.one_or_none()  # Optional[User]（多结果抛异常）
+user = result.one_or_none()  # User | None（多结果抛异常）
 count = result.count()       # int
 ```
 
@@ -159,10 +159,10 @@ from pytucky import Result, CursorResult
 
 | 方法 | 返回类型 | 说明 |
 |------|----------|------|
-| `all()` | `List[T]` | 所有记录 |
-| `first()` | `Optional[T]` | 第一条 |
+| `all()` | `list[T]` | 所有记录 |
+| `first()` | `T | None` | 第一条 |
 | `one()` | `T` | 唯一一条（否则抛异常） |
-| `one_or_none()` | `Optional[T]` | 唯一一条或 None |
+| `one_or_none()` | `T | None` | 唯一一条或 None |
 | `count()` | `int` | 记录数 |
 
 ### CursorResult（INSERT/UPDATE/DELETE 结果）
@@ -191,8 +191,10 @@ from pytucky import Result, CursorResult
 ```python
 from pytucky import prefetch, select
 
-stmt = select(User).options(prefetch(User.orders))
+stmt = select(User).options(prefetch('orders'))
 result = session.execute(stmt)
 users = result.all()
 # users[0].orders 已预加载，不会触发延迟查询
 ```
+
+如果 relationship 定义了 `storage=...`，`prefetch()` 会自动在该目标 `Storage` 上批量查询，因此同样适用于跨库 relationship。

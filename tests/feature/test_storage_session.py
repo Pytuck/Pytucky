@@ -1,9 +1,8 @@
 from pathlib import Path
-from typing import Type
 
 import pytest
 
-from pytucky import Column, Storage, declarative_base
+from pytucky import Storage
 from tests.helpers.factories import build_user_storage
 
 

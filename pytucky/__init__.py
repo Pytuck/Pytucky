@@ -1,15 +1,14 @@
 """
 Pytucky - 单文件、高性能、纯 Python 文档数据库
 
-基于 PTK7 二进制格式的轻量级文档数据库，专为受限 Python 环境设计。
+基于 PTK7 格式的轻量级文档数据库，专为受限 Python 环境设计。
 提供类似 SQLAlchemy 的声明式 ORM API，无外部依赖。
 
 示例用法：
-    from typing import Type
-    from pytucky import Storage, declarative_base, Session, Column
+    from pytucky import Storage, declarative_base, Session, Column, PureBaseModel
 
     db = Storage(file_path='mydb.pytucky')
-    Base: Type = declarative_base(db)
+    Base: type[PureBaseModel] = declarative_base(db)
 
     class User(Base):
         __tablename__ = 'users'

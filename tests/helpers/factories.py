@@ -1,13 +1,14 @@
-from pathlib import Path
-from typing import Iterable, Dict, Any
-from pytucky import Column, Storage
-from pytucky.common.options import BinaryBackendOptions
+from __future__ import annotations
 
+from pathlib import Path
+from typing import Iterable, Any
+from pytucky import Column, Storage
+from pytucky.common.options import PytuckBackendOptions
 
 def build_user_storage(file_path: Path, *, lazy_load: bool = True) -> Storage:
     storage = Storage(
         file_path=file_path,
-        backend_options=BinaryBackendOptions(),
+        backend_options=PytuckBackendOptions(),
     )
     storage.create_table(
         "users",
@@ -19,7 +20,6 @@ def build_user_storage(file_path: Path, *, lazy_load: bool = True) -> Storage:
     )
     return storage
 
-
-def insert_users(storage: Storage, rows: Iterable[Dict[str, Any]]) -> None:
+def insert_users(storage: Storage, rows: Iterable[dict[str, Any]]) -> None:
     for row in rows:
         storage.insert("users", dict(row))

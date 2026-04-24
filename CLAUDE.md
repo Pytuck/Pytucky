@@ -13,12 +13,12 @@
 
 ## 项目简介
 
-Pytucky 是**单文件、高性能、纯 Python 文档数据库**，基于 **PTK7** 二进制格式。
+Pytucky 是**单文件、高性能、纯 Python 文档数据库**，基于 **PTK7** 格式。
 
 **定位**：专为受限 Python 环境设计（如 Ren'Py），像 SQLite 一样高性能按需读写，无外部依赖。提供类似 SQLAlchemy 的声明式 ORM API。
 
 **与 Pytuck 的关系**：
-- 两个库共享 **PTK7** 二进制格式
+- 两个库共享 **PTK7** 格式
 - 保留兼容的核心 ORM API（Column、declarative_base、Session、select/insert/update/delete）
 - pytucky 是精简版：只有 PTK7 单引擎，无多引擎支持、无 connectors、无 native-SQL
 - 用户仅需更改 `import pytuck` → `import pytucky` 即可切换基础用法
@@ -38,7 +38,7 @@ Pytucky 是**单文件、高性能、纯 Python 文档数据库**，基于 **PTK
 - [x] 移除 native-SQL / connector 路径（compiler.py、所有 _native_sql 方法）
 - [x] 移除 WAL 残留和过时选项（lazy_load、sidecar_wal、encryption 等）
 - [x] 移除 PTK5 / backend_binary.py 及迁移工具
-- [x] 精简 BinaryBackendOptions 为空 dataclass
+- [x] 统一后端配置命名为 `PytuckBackendOptions`
 - [x] 精简 StorageBackend 基类为最小抽象接口
 - [x] 完整测试覆盖（65 个测试全部通过）
 
@@ -51,7 +51,7 @@ pytucky/
 │   ├── py.typed              # 类型注解标记文件
 │   ├── common/               # 公共模块（无内部依赖）
 │   │   ├── __init__.py
-│   │   ├── options.py        # 配置选项：BinaryBackendOptions、SyncOptions、SyncResult
+│   │   ├── options.py        # 配置选项：PytuckBackendOptions、SyncOptions、SyncResult
 │   │   ├── typing.py         # 类型别名定义
 │   │   ├── utils.py          # 工具函数
 │   │   ├── crypto.py         # 加密支持
@@ -75,7 +75,7 @@ pytucky/
 │       ├── base.py           # StorageBackend 最小抽象基类
 │       ├── backend_pytucky.py # PTK7 引擎实现（含 HashIndexProxy/SortedIndexProxy 物化缓存）
 │       ├── store.py          # PTK7 底层存储（Store 类，页式读写）
-│       ├── format.py         # PTK7 二进制格式编解码
+│       ├── format.py         # PTK7 格式编解码
 │       ├── index.py          # PTK7 索引编解码（encode/decode sorted pairs）
 │       └── versions.py       # 格式版本号（pytucky: 7）
 ├── tests/                    # 测试文件
@@ -102,7 +102,7 @@ db = Storage(file_path='mydb.pytucky')
 ## 开发约定
 
 ### 代码风格
-- 使用 Python 3.7+ 类型注解
+- 使用 Python 3.10+ 类型注解
 - 遵循 PEP 8 规范
 - 中文注释，英文代码
 
@@ -136,7 +136,7 @@ uv run pytest tests/ -v
 | `query/builder.py` | 查询构建 |
 | `backends/backend_pytucky.py` | PTK7 引擎实现 |
 | `backends/store.py` | PTK7 底层存储 |
-| `backends/format.py` | PTK7 二进制格式 |
+| `backends/format.py` | PTK7 格式 |
 
 异常只在 `common/exceptions.py` 定义，工具函数只在 `common/utils.py` 定义。
 
@@ -144,7 +144,7 @@ uv run pytest tests/ -v
 
 ```bash
 # 安装开发依赖
-uv pip install -e ".[dev]"
+uv sync --extra dev
 
 # 一键运行所有测试
 uv run pytest tests/ -v

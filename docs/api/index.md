@@ -59,8 +59,9 @@ from pytucky import (
 
 ## 版本
 
-当前版本：**1.0.0**
+当前版本：**1.1.0**
 
-- Python 要求：>= 3.7
+- Python 要求：>= 3.10
 - 运行时依赖：无
-- 数据格式：PTK7（`.pytucky` 文件）
+- 数据格式：PTK7（默认 `.pytuck`，显式 `.pytucky` 兼容）
+- 版本记录：`CHANGELOG.md`

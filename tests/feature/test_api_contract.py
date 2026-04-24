@@ -1,17 +1,17 @@
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Type
 
 import pytest
 
 from pytucky import Column, CRUDBaseModel, PureBaseModel, Session, Storage
 from pytucky import declarative_base, insert, select
 
-
 @pytest.mark.feature
 def test_pure_model_roundtrip_after_reopen(tmp_path: Path) -> None:
     db_path = tmp_path / "contract.pytucky"
     db = Storage(file_path=db_path)
-    Base: Type[PureBaseModel] = declarative_base(db)
+    Base: type[PureBaseModel] = declarative_base(db)
 
     class User(Base):
         __tablename__ = "users"
@@ -45,12 +45,11 @@ def test_pure_model_roundtrip_after_reopen(tmp_path: Path) -> None:
         reopened_session.close()
         reopened.close()
 
-
 @pytest.mark.feature
 def test_active_record_roundtrip_after_reopen(tmp_path: Path) -> None:
     db_path = tmp_path / "crud-contract.pytucky"
     db = Storage(file_path=db_path)
-    Base: Type[CRUDBaseModel] = declarative_base(db, crud=True)
+    Base: type[CRUDBaseModel] = declarative_base(db, crud=True)
 
     class User(Base):
         __tablename__ = "users"
@@ -65,7 +64,7 @@ def test_active_record_roundtrip_after_reopen(tmp_path: Path) -> None:
         db.close()
 
     reopened = Storage(file_path=db_path)
-    ReopenedBase: Type[CRUDBaseModel] = declarative_base(reopened, crud=True)
+    ReopenedBase: type[CRUDBaseModel] = declarative_base(reopened, crud=True)
 
     class ReopenedUser(ReopenedBase):
         __tablename__ = "users"
@@ -78,7 +77,6 @@ def test_active_record_roundtrip_after_reopen(tmp_path: Path) -> None:
         assert user.name == "Bob"
     finally:
         reopened.close()
-
 
 @pytest.mark.feature
 def test_storage_open_requires_no_lazy_option(tmp_path: Path) -> None:
@@ -102,7 +100,6 @@ def test_storage_open_requires_no_lazy_option(tmp_path: Path) -> None:
         assert reopened.select("users", 1)["name"] == "Alice"
     finally:
         reopened.close()
-
 
 @pytest.mark.feature
 def test_storage_flush_bulk_loads_store_without_row_by_row_insert(
@@ -140,7 +137,6 @@ def test_storage_flush_bulk_loads_store_without_row_by_row_insert(
         assert db.select("users", 2)["name"] == "Bob"
     finally:
         db.close()
-
 
 @pytest.mark.feature
 def test_storage_close_delegates_to_backend_close(

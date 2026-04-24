@@ -1,12 +1,12 @@
-from typing import Any, Iterable, List
+from __future__ import annotations
+
+from typing import Any, Iterable
 from itertools import product
 
-
-def lazy_modes() -> List[bool]:
+def lazy_modes() -> list[bool]:
     return [False, True]
 
-
-def dict_matrix(**dimensions: Iterable[Any]) -> List[dict]:
+def dict_matrix(**dimensions: Iterable[Any]) -> list[dict]:
     """Create a list of dictionaries representing the cartesian product of dimensions.
 
     Example: dict_matrix(a=[1,2], b=[True,False]) ->
@@ -17,7 +17,7 @@ def dict_matrix(**dimensions: Iterable[Any]) -> List[dict]:
         return [{}]
 
     values_lists = [list(dimensions[k]) for k in keys]
-    result: List[dict] = []
+    result: list[dict] = []
     for combo in product(*values_lists):
         d = {k: v for k, v in zip(keys, combo)}
         result.append(d)

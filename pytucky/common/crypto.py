@@ -7,12 +7,12 @@ Pytucky 加密模块 - 纯 Python 实现，零外部依赖
 - high: ChaCha20（密码学安全）
 """
 
-from typing import Optional, Union
+from __future__ import annotations
+
 import hashlib
 import struct
 
 from .exceptions import ConfigurationError
-
 
 # 加密等级常量
 ENCRYPTION_LEVELS = ('low', 'medium', 'high')
@@ -23,7 +23,6 @@ KDF_ITERATIONS = {
     'medium': 1000,
     'high': 10000,
 }
-
 
 class CryptoProvider:
     """加密工具类"""
@@ -75,7 +74,6 @@ class CryptoProvider:
             密钥是否匹配
         """
         return CryptoProvider.compute_key_check(key) == key_check
-
 
 class XORCipher:
     """
@@ -161,7 +159,6 @@ class XORCipher:
         for i, b in enumerate(data):
             result[i] = b ^ self.keystream[(offset + i) % keylen]
         return bytes(result)
-
 
 class LCGCipher:
     """
@@ -279,7 +276,6 @@ class LCGCipher:
             result[i] = data[i] ^ ((state >> 16) & 0xFF)
         return bytes(result)
 
-
 class ChaCha20Cipher:
     """
     高级加密：ChaCha20
@@ -290,7 +286,7 @@ class ChaCha20Cipher:
     性能税：中等（~30-50%）
     """
 
-    def __init__(self, key: bytes, nonce: Optional[bytes] = None) -> None:
+    def __init__(self, key: bytes, nonce: bytes | None = None) -> None:
         """
         初始化 ChaCha20 加密器
 
@@ -431,10 +427,8 @@ class ChaCha20Cipher:
 
         return bytes(result)
 
-
 # 类型别名
-CipherType = Union[XORCipher, LCGCipher, ChaCha20Cipher]
-
+CipherType = XORCipher | LCGCipher | ChaCha20Cipher
 
 def get_cipher(level: str, key: bytes) -> CipherType:
     """
@@ -450,18 +444,16 @@ def get_cipher(level: str, key: bytes) -> CipherType:
     Raises:
         ConfigurationError: 无效的加密等级
     """
-    ciphers = {
-        'low': XORCipher,
-        'medium': LCGCipher,
-        'high': ChaCha20Cipher,
-    }
-    if level not in ciphers:
-        raise ConfigurationError(
-            f"Invalid encryption level: {level}. Must be one of {ENCRYPTION_LEVELS}",
-            details={'level': level, 'valid_levels': ENCRYPTION_LEVELS}
-        )
-    return ciphers[level](key)
-
+    if level == 'low':
+        return XORCipher(key)
+    if level == 'medium':
+        return LCGCipher(key)
+    if level == 'high':
+        return ChaCha20Cipher(key)
+    raise ConfigurationError(
+        f"Invalid encryption level: {level}. Must be one of {ENCRYPTION_LEVELS}",
+        details={'level': level, 'valid_levels': ENCRYPTION_LEVELS}
+    )
 
 def get_encryption_level_code(level: str) -> int:
     """
@@ -476,8 +468,7 @@ def get_encryption_level_code(level: str) -> int:
     codes = {'low': 1, 'medium': 2, 'high': 3}
     return codes.get(level, 0)
 
-
-def get_encryption_level_name(code: int) -> Optional[str]:
+def get_encryption_level_name(code: int) -> str | None:
     """
     从数值代码获取加密等级名称
 

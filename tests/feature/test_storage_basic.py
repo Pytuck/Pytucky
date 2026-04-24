@@ -1,16 +1,16 @@
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Type
 
 import pytest
 
 from pytucky import Column, Session, Storage, declarative_base, insert, select
 from pytucky import PureBaseModel
 
-
 @pytest.mark.feature
 def test_session_commit_persists_inserted_rows(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "session-basic.pytucky")
-    Base: Type[PureBaseModel] = declarative_base(db)
+    Base: type[PureBaseModel] = declarative_base(db)
 
     class User(Base):
         __tablename__ = "users"
@@ -32,11 +32,10 @@ def test_session_commit_persists_inserted_rows(tmp_path: Path) -> None:
         finally:
             db.close()
 
-
 @pytest.mark.feature
 def test_transaction_rollback_restores_original_data(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "rollback.pytucky")
-    Base: Type[PureBaseModel] = declarative_base(db)
+    Base: type[PureBaseModel] = declarative_base(db)
 
     class User(Base):
         __tablename__ = "users"

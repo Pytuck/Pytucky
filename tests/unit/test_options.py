@@ -1,14 +1,18 @@
-import pytest
-
-from pytucky.common import options
-from pytucky.common.options import BinaryBackendOptions
+from pytucky.common.options import PytuckBackendOptions
 
 
-def test_get_default_backend_options_returns_binary_for_known_and_unknown_engines():
-    known = options.get_default_backend_options('pytuck')
-    current = options.get_default_backend_options('pytucky')
-    unknown = options.get_default_backend_options('json')
-    fallback = options.get_default_backend_options('anything_else')
+def test_pytuck_backend_options_have_encryption_fields_and_defaults():
+    opts = PytuckBackendOptions()
+    # 默认无加密
+    assert hasattr(opts, 'encryption')
+    assert opts.encryption is None
+    # 默认无密码
+    assert hasattr(opts, 'password')
+    assert opts.password is None
 
-    for value in (known, current, unknown, fallback):
-        assert isinstance(value, BinaryBackendOptions)
+
+def test_pytuck_backend_options_accept_explicit_encryption_config():
+    opts = PytuckBackendOptions(encryption='high', password='secret123')
+
+    assert opts.encryption == 'high'
+    assert opts.password == 'secret123'

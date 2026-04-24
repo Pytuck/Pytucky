@@ -1,13 +1,32 @@
+from __future__ import annotations
+
+from functools import wraps
 from pathlib import Path
-from typing import Any, Dict, Optional
+from threading import RLock
+from typing import Any, Callable, Concatenate, ParamSpec, TypeVar
 
 from ..backends.store import Store, TableState, TableOverlay
 from ..core.storage import Table
 from ..core.orm import Column
-from ..common.options import BackendOptions, BinaryBackendOptions
+from ..core.index import BaseIndex
+from ..common.options import PytuckBackendOptions
 from ..common.exceptions import SerializationError
 from .base import StorageBackend
+from .format import FileHeader, HEADER_STRUCT
 
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def _backend_locked(
+    method: Callable[Concatenate["PytuckyBackend", P], R],
+) -> Callable[Concatenate["PytuckyBackend", P], R]:
+    @wraps(method)
+    def wrapper(self: "PytuckyBackend", *args: P.args, **kwargs: P.kwargs) -> R:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 class PytuckyBackend(StorageBackend):
     """Adapter backend that exposes Store to the high-level Storage API.
@@ -18,21 +37,24 @@ class PytuckyBackend(StorageBackend):
 
     ENGINE_NAME = 'pytucky'
 
-    def __init__(self, file_path: Path, options: Optional[BackendOptions] = None):
-        super().__init__(file_path, options or BinaryBackendOptions())
-        # ensure suffix
-        if self.file_path.suffix.lower() in {'', '.pytuck'}:
-            self.file_path = self.file_path.with_suffix('.pytucky')
+    def __init__(self, file_path: Path, options: PytuckBackendOptions | None = None):
+        super().__init__(file_path, options or PytuckBackendOptions())
+        self._lock = RLock()
+        # ensure suffix: only when no suffix provided, default to .pytuck
+        if self.file_path.suffix == '':
+            self.file_path = self.file_path.with_suffix('.pytuck')
         # initialize store; offset map built lazily on demand
-        self.store = Store(self.file_path)
-        self._offset_map: Optional[Dict[int, tuple[str, Any]]] = None
+        # pass backend options through to Store so encryption/password etc. are honored
+        self.store = Store(self.file_path, self.options)
+        self._offset_map: dict[int, tuple[str, Any]] | None = None
 
+    @_backend_locked
     def _rebuild_offset_map(self) -> None:
         """Rebuild internal offset lookup from the current Store state (lazy, on demand only).
 
         Maps each data offset to (table_name, pk) for O(1) table/record resolution by file offset.
         """
-        omap: Dict[int, tuple[str, Any]] = {}
+        omap: dict[int, tuple[str, Any]] = {}
         for tname, state in self.store._tables.items():
             for pk, (off, length) in state.pk_index.items():
                 omap[off] = (tname, pk)
@@ -45,6 +67,7 @@ class PytuckyBackend(StorageBackend):
     def exists(self) -> bool:
         return self.file_path.exists()
 
+    @_backend_locked
     def delete(self) -> None:
         self.store.close()
         if self.file_path.exists():
@@ -55,28 +78,37 @@ class PytuckyBackend(StorageBackend):
         return True
 
     @staticmethod
-    def probe(file_path: Path):
+    def probe(file_path: str | Path) -> tuple[bool, dict[str, Any] | None]:
         """Probe whether given file_path is a PTK7 store.
 
         Returns (True, info) on match, (False, None) otherwise.
+        This probe only reads the file header and does not attempt to fully open
+        the Store, so it works for encrypted files without providing passwords.
         """
         try:
             path = Path(file_path).expanduser()
-            if not path.exists() or not path.is_file() or path.stat().st_size < 64:
+            if not path.exists() or not path.is_file() or path.stat().st_size < HEADER_STRUCT.size:
                 return False, None
-            # Do not raise on init; Store will attempt to open and validate header
-            Store(path)
-            return True, {"engine": PytuckyBackend.ENGINE_NAME, "version": 7}
+            with path.open('rb') as handle:
+                hdr_bytes = handle.read(HEADER_STRUCT.size)
+                if len(hdr_bytes) < HEADER_STRUCT.size:
+                    return False, None
+                try:
+                    FileHeader.unpack(hdr_bytes)
+                    return True, {"engine": PytuckyBackend.ENGINE_NAME, "version": 7}
+                except Exception:
+                    return False, None
         except Exception:
             return False, None
 
-    def load(self) -> Dict[str, Table]:
+    @_backend_locked
+    def load(self) -> dict[str, Table]:
         # Map Store table states to core.Table objects without materializing rows
-        tables: Dict[str, Table] = {}
+        tables: dict[str, Table] = {}
         for name, state in self.store._tables.items():
             # build Column list expected by Table
             cols = [col for col in state.columns]
-            # state.columns is List[Column]
+            # state.columns is list[Column]
             table = Table(state.name, state.columns, state.primary_key, None)
             table.next_id = state.next_id
             table._backend = self
@@ -104,8 +136,8 @@ class PytuckyBackend(StorageBackend):
                     self._table = table_name
                     self._column = column_obj
                     self._materialized = False
-                    self._added: Dict[Any, set] = {}
-                    self._removed: Dict[Any, set] = {}
+                    self._added: dict[Any, set] = {}
+                    self._removed: dict[Any, set] = {}
 
                 def _materialize(self) -> None:
                     if self._materialized:
@@ -114,7 +146,7 @@ class PytuckyBackend(StorageBackend):
                     state = self._store.table_state(self._table)
                     cim = state.index_meta.get(self.column_name)
                     if cim is not None:
-                        blob = self._store._read_bytes_at(cim.offset, cim.size)
+                        blob = self._store._read_region(cim.offset, cim.size)
                         from . import index as idx_mod
                         pairs = idx_mod.decode_sorted_pairs(blob, self._column)
                         for val, pk in pairs:
@@ -188,8 +220,8 @@ class PytuckyBackend(StorageBackend):
                     self._table = table_name
                     self._column = column_obj
                     self._materialized = False
-                    self._added: Dict[Any, set] = {}
-                    self._removed: Dict[Any, set] = {}
+                    self._added: dict[Any, set] = {}
+                    self._removed: dict[Any, set] = {}
 
                 def _materialize(self) -> None:
                     if self._materialized:
@@ -197,7 +229,7 @@ class PytuckyBackend(StorageBackend):
                     state = self._store.table_state(self._table)
                     cim = state.index_meta.get(self.column_name)
                     if cim is not None:
-                        blob = self._store._read_bytes_at(cim.offset, cim.size)
+                        blob = self._store._read_region(cim.offset, cim.size)
                         from . import index as idx_mod
                         pairs = idx_mod.decode_sorted_pairs(blob, self._column)
                         for val, pk in pairs:
@@ -266,7 +298,7 @@ class PytuckyBackend(StorageBackend):
                     cim = state.index_meta.get(self.column_name)
                     result = set()
                     if cim is not None:
-                        blob = self._store._read_bytes_at(cim.offset, cim.size)
+                        blob = self._store._read_region(cim.offset, cim.size)
                         from ..backends import index
                         pks = index.range_search_sorted_pairs(blob, self._column, min_val, max_val, include_min, include_max)
                         result.update(pks)
@@ -307,6 +339,7 @@ class PytuckyBackend(StorageBackend):
                         break
                 if col_obj is None:
                     continue
+                index_obj: BaseIndex
                 if col_obj.index == 'sorted':
                     index_obj = SortedIndexProxy(col_name, self.store, state.name, col_obj)
                 else:
@@ -318,13 +351,14 @@ class PytuckyBackend(StorageBackend):
             tables[name] = table
         return tables
 
-    def populate_tables_with_data(self, tables: Dict[str, Table]) -> None:
+    def populate_tables_with_data(self, tables: dict[str, Table]) -> None:
         # Ensure all lazy tables materialize via Table._ensure_all_loaded
         for table in tables.values():
             if table._lazy_loaded:
                 table._ensure_all_loaded()
 
-    def read_lazy_record(self, file_path: Path, offset: int, columns: Dict[str, Column], pk: Any, *, table_name: Optional[str] = None) -> Dict[str, Any]:
+    @_backend_locked
+    def read_lazy_record(self, file_path: Path, offset: int, columns: dict[str, Column], pk: Any, *, table_name: str | None = None) -> dict[str, Any]:
         try:
             # 快速路径：调用方已知 table_name，直接 select，跳过 offset_map
             if table_name is not None:
@@ -332,35 +366,49 @@ class PytuckyBackend(StorageBackend):
             # 慢路径：延迟构建 offset_map 后查找
             if self._offset_map is None:
                 self._rebuild_offset_map()
+            assert self._offset_map is not None
             entry = self._offset_map.get(offset)
             if entry is None:
                 for tname, state in self.store._tables.items():
-                    if pk in state.pk_index:
-                        entry = (tname, pk)
-                        self._offset_map[offset] = entry
+                    for candidate_pk, (candidate_offset, _length) in state.pk_index.items():
+                        if candidate_offset == offset:
+                            entry = (tname, candidate_pk)
+                            self._offset_map[offset] = entry
+                            break
+                    if entry is not None:
                         break
             if entry is None:
                 raise KeyError(f'Offset {offset} not known')
             resolved_table, resolved_pk = entry
-            try:
-                return self.store.select(resolved_table, pk)
-            except Exception:
-                return self.store.select(resolved_table, resolved_pk)
+            return self.store.select(resolved_table, resolved_pk)
         except Exception as exc:
             raise SerializationError(f'V7 read lazy record failed: {exc}') from exc
 
-    def save(self, tables: Dict[str, Table], *, changed_tables: Optional[set] = None) -> None:
+    @_backend_locked
+    def save(self, tables: dict[str, Table], *, changed_tables: set | None = None) -> None:
         # Convert high-level tables into Store internal states and flush via store.flush.
         # Rebuild directly from table scan results for changed tables to avoid per-row Store.insert overhead.
         # For unchanged tables, reuse existing Store.TableState to avoid materializing lazy tables.
         changed_tables = set(changed_tables or set())
         # capture previous on-disk states to allow reusing unchanged tables without materializing
-        prev_states: Dict[str, TableState] = {k: v for k, v in getattr(self.store, '_tables', {}).items()}
+        prev_states: dict[str, TableState] = {k: v for k, v in getattr(self.store, '_tables', {}).items()}
         # close current store to prepare writing new file
+        # preserve loaded encryption level so that reopening with only a password
+        # can keep writing back the same encryption level
+        prev_loaded_encryption = getattr(self.store, '_loaded_encryption_level', None)
         self.store.close()
         # create a fresh store object representing the new on-disk layout
-        self.store = Store(self.file_path, open_existing=False)
-        rebuilt_tables: Dict[str, TableState] = {}
+        # ensure backend options are passed through when recreating Store
+        self.store = Store(self.file_path, self.options, open_existing=False)
+        # restore loaded encryption level into the fresh Store instance so flush() can
+        # pick it up when backend_options.encryption is not explicitly set
+        # Only restore previous loaded encryption level when caller did not explicitly
+        # set an encryption level in backend options. If backend options specify
+        # encryption (including None explicitly), prefer that value and do not
+        # overwrite the newly created Store's state.
+        if prev_loaded_encryption is not None and getattr(self.options, 'encryption', None) is None:
+            self.store._loaded_encryption_level = prev_loaded_encryption
+        rebuilt_tables: dict[str, TableState] = {}
 
         for name, table in tables.items():
             if name not in changed_tables and name in prev_states:
@@ -413,30 +461,31 @@ class PytuckyBackend(StorageBackend):
                         state.overlay.inserted[pk] = dict(rec)
                     rebuilt_tables[name] = state
                 else:
-                    prev = prev_states.get(name)
+                    previous_state = prev_states.get(name)
+                    assert previous_state is not None
                     state = TableState(
-                        name=prev.name,
-                        columns=list(prev.columns),
-                        primary_key=prev.primary_key,
+                        name=previous_state.name,
+                        columns=list(previous_state.columns),
+                        primary_key=previous_state.primary_key,
                         next_id=table.next_id,
-                        record_count=prev.record_count,
-                        data_offset=prev.data_offset,
-                        data_size=prev.data_size,
-                        pk_index=dict(prev.pk_index),
-                        index_meta=dict(prev.index_meta),
+                        record_count=previous_state.record_count,
+                        data_offset=previous_state.data_offset,
+                        data_size=previous_state.data_size,
+                        pk_index=dict(previous_state.pk_index),
+                        index_meta=dict(previous_state.index_meta),
                         overlay=TableOverlay(),
                     )
                     # Apply explicit dirty PK sets to overlay without materializing entire table
                     # Inserted: must exist in table.data
                     for pk in inserted_set:
-                        rec = table.data.get(pk)
-                        if rec is not None:
-                            state.overlay.inserted[pk] = dict(rec)
+                        inserted_record = table.data.get(pk)
+                        if inserted_record is not None:
+                            state.overlay.inserted[pk] = dict(inserted_record)
                     # Updated: records that exist on disk and were updated in memory
                     for pk in updated_set:
-                        rec = table.data.get(pk)
-                        if rec is not None:
-                            state.overlay.updated[pk] = dict(rec)
+                        updated_record = table.data.get(pk)
+                        if updated_record is not None:
+                            state.overlay.updated[pk] = dict(updated_record)
                     # Deleted: mark for deletion in overlay
                     for pk in getattr(table, 'deleted', set()):
                         state.overlay.deleted.add(pk)
@@ -464,5 +513,6 @@ class PytuckyBackend(StorageBackend):
         # invalidate offset map; will be rebuilt lazily if needed
         self._offset_map = None
 
+    @_backend_locked
     def close(self) -> None:
         self.store.close()

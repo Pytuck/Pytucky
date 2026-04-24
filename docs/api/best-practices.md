@@ -5,7 +5,7 @@
 ### flush 与 close
 
 ```python
-db = Storage(file_path='mydb.pytucky')
+db = Storage(file_path='mydb.pytuck')
 try:
     # ... 操作 ...
     db.flush()  # 显式写盘（可选，close 会自动 flush）
@@ -18,7 +18,7 @@ finally:
 ### auto_flush
 
 ```python
-db = Storage(file_path='mydb.pytucky', auto_flush=True)
+db = Storage(file_path='mydb.pytuck', auto_flush=True)
 ```
 
 每次写操作（insert/update/delete）后自动刷盘。适合数据安全性要求高但写入量不大的场景。
@@ -186,7 +186,7 @@ from pytucky import Storage, declarative_base, Session, Column
 | 特性 | pytuck | pytucky |
 |------|--------|---------|
 | 引擎 | 8 种（json, csv, sqlite 等） | PTK7 单引擎 |
-| 文件格式 | 多种 | `.pytucky`（PTK7） |
+| 文件格式 | 多种 | 默认 `.pytuck`（PTK7），显式 `.pytucky` 兼容 |
 | Storage 参数 | engine, backend_options 等 | file_path, in_memory, auto_flush |
 | 迁移工具 | tools.py | 无（单格式无需迁移） |
 | Native SQL | 支持 | 不支持 |

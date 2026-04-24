@@ -5,13 +5,12 @@ Pytucky ORM层
 - PureBaseModel: 纯模型定义，通过 Session 操作数据
 - CRUDBaseModel: Active Record 模式，模型自带 CRUD 方法
 """
+
+from __future__ import annotations
 import sys
 import json
 import base64
-from typing import (
-    Any, Callable, Dict, List, Optional, Tuple, Type, Union, TYPE_CHECKING,
-    Set, overload, Literal, Generic, cast
-)
+from typing import Any, Callable, TYPE_CHECKING, overload, Literal, Generic, cast
 from datetime import datetime, date, timedelta, timezone
 
 from ..common.exceptions import ValidationError, TypeConversionError, SchemaError
@@ -24,10 +23,8 @@ if TYPE_CHECKING:
     from .session import Session
     from ..query import Query, BinaryExpression
 
-
 # 无主键时使用的内部 rowid 保留键名
 PSEUDO_PK_NAME: str = '_pytuck_rowid'
-
 
 # ==================== JSON 序列化辅助 ====================
 
@@ -55,7 +52,6 @@ def _json_serial(obj: Any) -> Any:
     if isinstance(obj, bytes):
         return base64.b64encode(obj).decode('ascii')
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
-
 
 # ==================== 类型转换函数（模块级别） ====================
 
@@ -88,7 +84,6 @@ def _convert_to_bool(value: Any) -> bool:
         target_type='bool'
     )
 
-
 def _convert_to_bytes(value: Any) -> bytes:
     """转换为字节类型"""
     if isinstance(value, bytes):
@@ -102,7 +97,6 @@ def _convert_to_bytes(value: Any) -> bytes:
         value=value,
         target_type='bytes'
     )
-
 
 def _convert_to_datetime(value: Any) -> datetime:
     """
@@ -121,7 +115,7 @@ def _convert_to_datetime(value: Any) -> datetime:
     if isinstance(value, str):
         # 尝试解析 ISO 格式
         try:
-            # Python 3.7+ 的 fromisoformat 支持大部分 ISO 8601 格式
+            # datetime.fromisoformat 支持大部分 ISO 8601 格式
             return datetime.fromisoformat(value)
         except ValueError:
             # 尝试带 Z 后缀的 UTC 格式
@@ -136,7 +130,6 @@ def _convert_to_datetime(value: Any) -> datetime:
         value=value,
         target_type='datetime'
     )
-
 
 def _convert_to_date(value: Any) -> date:
     """
@@ -158,7 +151,6 @@ def _convert_to_date(value: Any) -> date:
         value=value,
         target_type='date'
     )
-
 
 def _convert_to_timedelta(value: Any) -> timedelta:
     """
@@ -196,7 +188,6 @@ def _convert_to_timedelta(value: Any) -> timedelta:
         target_type='timedelta'
     )
 
-
 def _convert_to_list(value: Any) -> list:
     """
     转换为 list
@@ -226,7 +217,6 @@ def _convert_to_list(value: Any) -> list:
         target_type='list'
     )
 
-
 def _convert_to_dict(value: Any) -> dict:
     """
     转换为 dict
@@ -253,10 +243,9 @@ def _convert_to_dict(value: Any) -> dict:
         target_type='dict'
     )
 
-
 # 类型转换函数注册表
 # 将 Python 类型映射到对应的转换函数
-_TYPE_CONVERTERS: Dict[type, Callable[[Any], Any]] = {
+_TYPE_CONVERTERS: dict[type, Callable[[Any], Any]] = {
     bool: _convert_to_bool,
     bytes: _convert_to_bytes,
     int: int,
@@ -268,7 +257,6 @@ _TYPE_CONVERTERS: Dict[type, Callable[[Any], Any]] = {
     list: _convert_to_list,
     dict: _convert_to_dict,
 }
-
 
 class Column:
     """列定义
@@ -289,19 +277,16 @@ class Column:
     def __init__(self,
                  col_type: ColumnTypes,
                  *,
-                 name: Optional[str] = None,
+                 name: str | None = None,
                  nullable: bool = True,
                  primary_key: bool = False,
-                 index: Union[bool, str] = False,
+                 index: bool | str = False,
                  default: Any = None,
-                 default_factory: Optional[Callable[[], Any]] = None,
-                 foreign_key: Optional[tuple] = None,
-                 comment: Optional[str] = None,
+                 default_factory: Callable[[], Any] | None = None,
+                 foreign_key: tuple | None = None,
+                 comment: str | None = None,
                  strict: bool = False,
-                 validator: Optional[Union[
-                     Callable[[Any], bool],
-                     List[Callable[[Any], bool]]
-                 ]] = None):
+                 validator: Callable[[Any], bool] | list[Callable[[Any], bool]] | None = None):
         """
         初始化列定义
 
@@ -342,7 +327,7 @@ class Column:
             raise ValidationError(
                 f"Unsupported index type: '{index}'. Use True, False, 'hash', or 'sorted'"
             )
-        self.index: Union[bool, str] = index
+        self.index: bool | str = index
         self.default = default
         self.default_factory = default_factory
         self.foreign_key = foreign_key
@@ -351,7 +336,7 @@ class Column:
 
         # 校验器
         if validator is None:
-            self._validators: List[Callable[[Any], bool]] = []
+            self._validators: list[Callable[[Any], bool]] = []
         elif callable(validator):
             self._validators = [validator]
         elif isinstance(validator, list):
@@ -475,7 +460,7 @@ class Column:
 
     # ==================== 描述符协议 ====================
 
-    def __set_name__(self, owner: Type['PureBaseModel'], name: str) -> None:
+    def __set_name__(self, owner: type['PureBaseModel'], name: str) -> None:
         """
         在类定义时被调用，存储属性名和拥有者类
 
@@ -488,7 +473,7 @@ class Column:
         if self.name is None:
             self.name = name
 
-    def __get__(self, instance: Optional['PureBaseModel'], owner: Type['PureBaseModel']) -> Union['Column', Any]:
+    def __get__(self, instance: 'PureBaseModel | None', owner: type['PureBaseModel']) -> 'Column | Any':
         """
         描述符协议：
         - 类访问（instance=None）：返回 Column 对象（用于查询）
@@ -558,7 +543,6 @@ class Column:
         from ..query import BinaryExpression
         return BinaryExpression(self, 'ENDSWITH', value)
 
-
 # ==================== 模型基类定义 ====================
 
 class PureBaseModel:
@@ -572,10 +556,9 @@ class PureBaseModel:
 
         from pytucky import Storage, declarative_base, Session, Column
         from pytucky import PureBaseModel
-        from typing import Type
 
         db = Storage(file_path='mydb.pytucky')
-        Base: Type[PureBaseModel] = declarative_base(db)
+        Base: type[PureBaseModel] = declarative_base(db)
 
         class User(Base):
             __tablename__ = 'users'
@@ -592,12 +575,12 @@ class PureBaseModel:
 
     # 类属性
     __abstract__: bool = True
-    __storage__: Optional['Storage'] = None
-    __tablename__: Optional[str] = None
-    __table_comment__: Optional[str] = None
-    __columns__: Dict[str, Column] = {}
-    __primary_key__: Optional[str] = None  # None 表示无主键，使用隐式 rowid
-    __relationships__: Dict[str, 'Relationship'] = {}
+    __storage__: 'Storage | None' = None
+    __tablename__: str | None = None
+    __table_comment__: str | None = None
+    __columns__: dict[str, Column] = {}
+    __primary_key__: str | None = None  # None 表示无主键，使用隐式 rowid
+    __relationships__: dict[str, 'Relationship'] = {}
 
     def __init__(self, **kwargs: Any):
         """初始化模型实例
@@ -613,7 +596,7 @@ class PureBaseModel:
         这样 session.flush()/commit() 就能检测到修改。
         """
         old_value = None
-        session: Optional['Session'] = None
+        session: 'Session | None' = None
 
         if (hasattr(self.__class__, name) and
             isinstance(getattr(self.__class__, name), Column) and
@@ -644,7 +627,7 @@ class PureBaseModel:
         return column.name if column and column.name else attr_name
 
     @classmethod
-    def _column_to_attr_name(cls, col_name: str) -> Optional[str]:
+    def _column_to_attr_name(cls, col_name: str) -> str | None:
         """
         将 Column.name 转换为属性名
 
@@ -662,10 +645,10 @@ class PureBaseModel:
     def to_dict(
         self,
         use_column_names: bool = False,
-        include: Optional[Set[str]] = None,
-        exclude: Optional[Set[str]] = None,
+        include: set[str] | None = None,
+        exclude: set[str] | None = None,
         depth: int = 0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         转换为字典
 
@@ -735,11 +718,11 @@ class PureBaseModel:
     def to_json(
         self,
         use_column_names: bool = False,
-        include: Optional[Set[str]] = None,
-        exclude: Optional[Set[str]] = None,
+        include: set[str] | None = None,
+        exclude: set[str] | None = None,
         depth: int = 0,
         ensure_ascii: bool = False,
-        indent: Optional[int] = None,
+        indent: int | None = None,
     ) -> str:
         """
         转换为 JSON 字符串
@@ -785,7 +768,6 @@ class PureBaseModel:
             pk_value = getattr(self, '_pytuck_rowid', None)
         return f"<{self.__class__.__name__}(pk={pk_value})>"
 
-
 class CRUDBaseModel(PureBaseModel):
     """
     Active Record 基类 - 模型自带 CRUD 方法
@@ -797,10 +779,9 @@ class CRUDBaseModel(PureBaseModel):
 
         from pytucky import Storage, declarative_base, Column
         from pytucky import CRUDBaseModel
-        from typing import Type
 
         db = Storage(file_path='mydb.pytucky')
-        Base: Type[CRUDBaseModel] = declarative_base(db, crud=True)
+        Base: type[CRUDBaseModel] = declarative_base(db, crud=True)
 
         class User(Base):
             __tablename__ = 'users'
@@ -867,7 +848,7 @@ class CRUDBaseModel(PureBaseModel):
         raise NotImplementedError("This method should be overridden by declarative_base")
 
     @classmethod
-    def get(cls, pk: Any) -> Optional['CRUDBaseModel']:
+    def get(cls, pk: Any) -> 'CRUDBaseModel | None':
         """
         根据主键获取记录
 
@@ -897,7 +878,7 @@ class CRUDBaseModel(PureBaseModel):
         raise NotImplementedError("This method should be overridden by declarative_base")
 
     @classmethod
-    def all(cls) -> List['CRUDBaseModel']:
+    def all(cls) -> list['CRUDBaseModel']:
         """
         获取所有记录
 
@@ -906,24 +887,23 @@ class CRUDBaseModel(PureBaseModel):
         """
         raise NotImplementedError("This method should be overridden by declarative_base")
 
-
 class Relationship(Generic[RelationshipT]):
     """关联关系描述符（延迟加载，支持类型提示）
 
     为获得精确的 IDE 类型提示，直接声明返回类型（需要 type: ignore）。
 
     Usage:
-        # 一对多（返回列表）- 直接声明 List[Order]
-        orders: List[Order] = Relationship('orders', foreign_key='user_id')  # type: ignore
+        # 一对多（返回列表）- 直接声明 list[Order]
+        orders: list[Order] = Relationship('orders', foreign_key='user_id')  # type: ignore
 
-        # 多对一（返回单个对象或 None）- 直接声明 Optional[User]
-        user: Optional[User] = Relationship('users', foreign_key='user_id')  # type: ignore
+        # 多对一（返回单个对象或 None）- 直接声明 User | None
+        user: User | None = Relationship('users', foreign_key='user_id')  # type: ignore
 
         # 自引用（需要显式指定 uselist）
-        parent: Optional[Category] = Relationship(  # type: ignore
+        parent: Category | None = Relationship(  # type: ignore
             'categories', foreign_key='parent_id', uselist=False
         )
-        children: List[Category] = Relationship(  # type: ignore
+        children: list[Category] = Relationship(  # type: ignore
             'categories', foreign_key='parent_id', uselist=True
         )
 
@@ -933,32 +913,33 @@ class Relationship(Generic[RelationshipT]):
     """
 
     def __init__(self,
-                 target_model: Union[str, Type[PureBaseModel]],
+                 target_model: str | type[PureBaseModel],
                  foreign_key: str,
-                 lazy: bool = True,
-                 back_populates: Optional[str] = None,
-                 uselist: Optional[bool] = None):
+                 *,
+                 storage: 'Storage | None' = None,
+                 back_populates: str | None = None,
+                 uselist: bool | None = None):
         """
         初始化关联关系
 
         Args:
             target_model: 目标模型类或表名（字符串）
             foreign_key: 外键字段名
-            lazy: 是否延迟加载
+            storage: 目标数据所在的 Storage；None 表示使用目标模型自己的 __storage__
             back_populates: 反向关联的属性名
             uselist: 是否返回列表（None=自动判断，True=强制列表，False=强制单个）
                 - 用于自引用等无法自动判断的场景
         """
         self.target_model = target_model
         self.foreign_key = foreign_key
-        self.lazy = lazy
+        self.storage = storage
         self.back_populates = back_populates
         self._uselist = uselist  # 用户指定的值
         self.is_one_to_many = False  # 自动判断的值
-        self.name: Optional[str] = None
-        self.owner: Optional[Type[PureBaseModel]] = None
+        self.name: str | None = None
+        self.owner: type[PureBaseModel] | None = None
 
-    def __set_name__(self, owner: Type[PureBaseModel], name: str) -> None:
+    def __set_name__(self, owner: type[PureBaseModel], name: str) -> None:
         """在类定义时调用"""
         self.name = name
         self.owner = owner
@@ -973,16 +954,16 @@ class Relationship(Generic[RelationshipT]):
             self.is_one_to_many = True
 
     @overload
-    def __get__(self, instance: None, owner: Type[PureBaseModel]) -> 'Relationship[RelationshipT]': ...
+    def __get__(self, instance: None, owner: type[PureBaseModel]) -> 'Relationship[RelationshipT]': ...
 
     @overload
-    def __get__(self, instance: PureBaseModel, owner: Type[PureBaseModel]) -> RelationshipT: ...
+    def __get__(self, instance: PureBaseModel, owner: type[PureBaseModel]) -> RelationshipT: ...
 
     def __get__(
         self,
-        instance: Optional[PureBaseModel],
-        owner: Type[PureBaseModel]
-    ) -> Union['Relationship[RelationshipT]', RelationshipT]:
+        instance: PureBaseModel | None,
+        owner: type[PureBaseModel]
+    ) -> 'Relationship[RelationshipT] | RelationshipT':
         """获取关联对象"""
         if instance is None:
             return self
@@ -990,41 +971,56 @@ class Relationship(Generic[RelationshipT]):
         # 检查缓存
         cache_key = f'_cached_{self.name}'
         if hasattr(instance, cache_key):
-            return getattr(instance, cache_key)
+            return cast('Relationship[RelationshipT] | RelationshipT', getattr(instance, cache_key))
 
         # 延迟加载
         target_model = self._resolve_target_model(owner)
+        target_storage = self._resolve_target_storage(target_model)
 
-        primary_key = getattr(owner, '__primary_key__', 'id')
+        primary_key = getattr(owner, '__primary_key__', None) or PSEUDO_PK_NAME
 
         # 确定是否返回列表：优先使用用户指定的 uselist，否则使用自动判断
         use_list = self._uselist if self._uselist is not None else self.is_one_to_many
+        target_table = getattr(target_model, '__tablename__', None)
+        assert target_table is not None, f"Model {target_model.__name__} must have __tablename__ defined"
 
         if use_list:
             # 一对多：查询外键指向当前实例的所有记录
-            pk_value = getattr(instance, primary_key)
-            # 使用 filter_by（如果目标模型支持）
-            if hasattr(target_model, 'filter_by'):
-                results: Union[Optional[PureBaseModel], List[PureBaseModel]] = target_model.filter_by(**{
-                    self.foreign_key: pk_value
-                }).all()
+            pk_value = getattr(instance, primary_key, None)
+            if pk_value is None:
+                results: PureBaseModel | None | list[PureBaseModel] = []
             else:
-                results = []
+                from ..query.builder import Condition
+                records = target_storage.query(
+                    target_table,
+                    [Condition(self.foreign_key, '=', pk_value)]
+                )
+                results = [
+                    self._record_to_instance(target_model, record)
+                    for record in records
+                ]
         else:
             # 多对一：根据外键值查询目标对象
             fk_value = getattr(instance, self.foreign_key)
+            target_pk = getattr(target_model, '__primary_key__', None)
             if fk_value is None:
                 results = None
-            elif hasattr(target_model, 'get'):
-                results = target_model.get(fk_value)
-            else:
+            elif target_pk is None:
                 results = None
+            else:
+                from ..common.exceptions import RecordNotFoundError
+                try:
+                    record = target_storage.select(target_table, fk_value)
+                except RecordNotFoundError:
+                    results = None
+                else:
+                    results = self._record_to_instance(target_model, record)
 
         # 缓存结果
         setattr(instance, cache_key, results)
         return cast(RelationshipT, results)
 
-    def _resolve_target_model(self, owner: Optional[Type[PureBaseModel]] = None) -> Type[PureBaseModel]:
+    def _resolve_target_model(self, owner: type[PureBaseModel] | None = None) -> type[PureBaseModel]:
         """
         解析目标模型
 
@@ -1038,6 +1034,12 @@ class Relationship(Generic[RelationshipT]):
         if not isinstance(self.target_model, str):
             return self.target_model
 
+        # 显式指定 storage 时，优先从该 storage 的模型注册表解析
+        if self.storage is not None:
+            model = self.storage._get_model_by_table(self.target_model)
+            if model:
+                return cast(type[PureBaseModel], model)
+
         # 使用 owner 或 self.owner
         actual_owner = owner or self.owner
         if actual_owner is None:
@@ -1050,21 +1052,55 @@ class Relationship(Generic[RelationshipT]):
         if storage:
             model = storage._get_model_by_table(self.target_model)
             if model:
-                return model
+                return cast(type[PureBaseModel], model)
 
         # 回退：从模块命名空间按类名查找（兼容旧用法）
         owner_module = sys.modules.get(actual_owner.__module__)
         if owner_module and hasattr(owner_module, self.target_model):
-            return getattr(owner_module, self.target_model)
+            return cast(type[PureBaseModel], getattr(owner_module, self.target_model))
 
         raise ValidationError(
             f"Cannot find model for '{self.target_model}'. "
             f"Use table name (e.g., 'users') or ensure the model class is defined."
         )
 
+    def _resolve_target_storage(self, target_model: type[PureBaseModel]) -> 'Storage':
+        """解析 relationship 读取时应使用的目标 Storage"""
+        if self.storage is not None:
+            return self.storage
+
+        target_storage = getattr(target_model, '__storage__', None)
+        if target_storage is None:
+            raise ValidationError(
+                f"Target model '{target_model.__name__}' is not bound to a Storage"
+            )
+        return target_storage
+
+    def _record_to_instance(
+        self,
+        model_class: type[PureBaseModel],
+        record: dict[str, Any],
+    ) -> PureBaseModel:
+        """将数据库记录转换为模型实例，并保留已加载状态"""
+        mapped: dict[str, Any] = {}
+        rowid = None
+        for db_col_name, value in record.items():
+            if db_col_name == PSEUDO_PK_NAME:
+                rowid = value
+                continue
+            attr_name = model_class._column_to_attr_name(db_col_name) or db_col_name
+            mapped[attr_name] = value
+
+        instance = model_class(**mapped)
+        pk_name = getattr(model_class, '__primary_key__', None)
+        if rowid is not None and pk_name is None:
+            setattr(instance, '_pytuck_rowid', rowid)
+        if hasattr(instance, '_loaded_from_db'):
+            instance._loaded_from_db = True
+        return instance
+
     def __repr__(self) -> str:
         return f"Relationship(target={self.target_model}, fk={self.foreign_key})"
-
 
 # ==================== 工厂函数 ====================
 
@@ -1074,9 +1110,8 @@ def declarative_base(
     *,
     crud: Literal[False] = ...,
     sync_schema: bool = ...,
-    sync_options: Optional[SyncOptions] = ...
-) -> Type[PureBaseModel]: ...
-
+    sync_options: SyncOptions | None = ...
+) -> type[PureBaseModel]: ...
 
 @overload
 def declarative_base(
@@ -1084,17 +1119,16 @@ def declarative_base(
     *,
     crud: Literal[True],
     sync_schema: bool = ...,
-    sync_options: Optional[SyncOptions] = ...
-) -> Type[CRUDBaseModel]: ...
-
+    sync_options: SyncOptions | None = ...
+) -> type[CRUDBaseModel]: ...
 
 def declarative_base(
     storage: 'Storage',
     *,
     crud: bool = False,
     sync_schema: bool = False,
-    sync_options: Optional[SyncOptions] = None
-) -> Union[Type[PureBaseModel], Type[CRUDBaseModel]]:
+    sync_options: SyncOptions | None = None
+) -> type[PureBaseModel] | type[CRUDBaseModel]:
     """
     创建声明式基类工厂函数
 
@@ -1116,10 +1150,9 @@ def declarative_base(
 
     Examples:
         # 纯模型（默认，推荐）
-        from typing import Type
         from pytucky import PureBaseModel
 
-        Base: Type[PureBaseModel] = declarative_base(db)
+        Base: type[PureBaseModel] = declarative_base(db)
 
         class User(Base):
             __tablename__ = 'users'
@@ -1135,7 +1168,7 @@ def declarative_base(
         # Active Record 模式
         from pytucky import CRUDBaseModel
 
-        Base: Type[CRUDBaseModel] = declarative_base(db, crud=True)
+        Base: type[CRUDBaseModel] = declarative_base(db, crud=True)
 
         class Post(Base):
             __tablename__ = 'posts'
@@ -1163,12 +1196,11 @@ def declarative_base(
     else:
         return _create_pure_base(storage, sync_schema, sync_options)
 
-
 def _create_pure_base(
     storage: 'Storage',
     sync_schema: bool = False,
-    sync_options: Optional[SyncOptions] = None
-) -> Type[PureBaseModel]:
+    sync_options: SyncOptions | None = None
+) -> type[PureBaseModel]:
     """创建纯模型基类"""
 
     class DeclarativePureBase(PureBaseModel):
@@ -1177,11 +1209,11 @@ def _create_pure_base(
         # 类属性
         __abstract__ = True
         __storage__ = storage
-        __tablename__: Optional[str] = None
-        __table_comment__: Optional[str] = None
-        __columns__: Dict[str, Column] = {}
-        __primary_key__: Optional[str] = None  # None 表示无主键，使用隐式 rowid
-        __relationships__: Dict[str, Relationship] = {}
+        __tablename__: str | None = None
+        __table_comment__: str | None = None
+        __columns__: dict[str, Column] = {}
+        __primary_key__: str | None = None  # None 表示无主键，使用隐式 rowid
+        __relationships__: dict[str, Relationship] = {}
 
         def __init_subclass__(cls, **kwargs: Any):
             """子类初始化时自动收集字段并创建表"""
@@ -1278,12 +1310,11 @@ def _create_pure_base(
 
     return DeclarativePureBase  # type: ignore
 
-
 def _create_crud_base(
     storage: 'Storage',
     sync_schema: bool = False,
-    sync_options: Optional[SyncOptions] = None
-) -> Type[CRUDBaseModel]:
+    sync_options: SyncOptions | None = None
+) -> type[CRUDBaseModel]:
     """创建带 CRUD 方法的模型基类"""
     from .event import event
 
@@ -1293,11 +1324,11 @@ def _create_crud_base(
         # 类属性
         __abstract__ = True
         __storage__ = storage
-        __tablename__: Optional[str] = None
-        __table_comment__: Optional[str] = None
-        __columns__: Dict[str, Column] = {}
-        __primary_key__: Optional[str] = None  # None 表示无主键，使用隐式 rowid
-        __relationships__: Dict[str, Relationship] = {}
+        __tablename__: str | None = None
+        __table_comment__: str | None = None
+        __columns__: dict[str, Column] = {}
+        __primary_key__: str | None = None  # None 表示无主键，使用隐式 rowid
+        __relationships__: dict[str, Relationship] = {}
 
         def __init_subclass__(cls, **kwargs: Any):
             """子类初始化时自动收集字段并创建表"""
@@ -1497,7 +1528,7 @@ def _create_crud_base(
             return instance
 
         @classmethod
-        def bulk_insert(cls, instances: List['DeclarativeCRUDBase']) -> List[Any]:
+        def bulk_insert(cls, instances: list['DeclarativeCRUDBase']) -> list[Any]:
             """
             批量插入实例（立即写入内存）
 
@@ -1514,9 +1545,9 @@ def _create_crud_base(
             event.dispatch_model_bulk(cls, 'before_bulk_insert', instances)
 
             # 构建数据字典列表
-            records: List[Dict[str, Any]] = []
+            records: list[dict[str, Any]] = []
             for instance in instances:
-                data: Dict[str, Any] = {}
+                data: dict[str, Any] = {}
                 for attr_name, column in cls.__columns__.items():
                     value = getattr(instance, attr_name, None)
                     db_col_name = column.name if column.name else attr_name
@@ -1545,7 +1576,7 @@ def _create_crud_base(
             return pks
 
         @classmethod
-        def bulk_update(cls, instances: List['DeclarativeCRUDBase']) -> int:
+        def bulk_update(cls, instances: list['DeclarativeCRUDBase']) -> int:
             """
             批量更新实例（立即写入内存，更新全部字段）
 
@@ -1566,7 +1597,7 @@ def _create_crud_base(
             pk_name = cls.__primary_key__
 
             # 构建 (pk, data) 元组列表
-            updates: List[Tuple[Any, Dict[str, Any]]] = []
+            updates: list[tuple[Any, dict[str, Any]]] = []
             for instance in instances:
                 if pk_name:
                     pk = getattr(instance, pk_name, None)
@@ -1578,7 +1609,7 @@ def _create_crud_base(
                         "Cannot bulk update instance without primary key or rowid"
                     )
 
-                data: Dict[str, Any] = {}
+                data: dict[str, Any] = {}
                 for attr_name, column in cls.__columns__.items():
                     value = getattr(instance, attr_name, None)
                     db_col_name = column.name if column.name else attr_name
@@ -1594,7 +1625,7 @@ def _create_crud_base(
             return count
 
         @classmethod
-        def get(cls, pk: Any) -> Optional['DeclarativeCRUDBase']:
+        def get(cls, pk: Any) -> 'DeclarativeCRUDBase | None':
             """根据主键获取记录
 
             注意：无主键模型无法使用此方法，会返回 None。
@@ -1662,7 +1693,7 @@ def _create_crud_base(
             return query
 
         @classmethod
-        def all(cls) -> List['DeclarativeCRUDBase']:  # type: ignore[override]
+        def all(cls) -> list['DeclarativeCRUDBase']:  # type: ignore[override]
             """获取所有记录"""
             from ..query import Query
             return Query(cls).all()

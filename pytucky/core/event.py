@@ -31,22 +31,22 @@ Storage 级事件：
     event.remove(User, 'before_insert', set_timestamp)
 """
 
-from typing import Any, Callable, Dict, List, Set, Tuple
+from __future__ import annotations
 
+from typing import Any, Callable
 
 # 有效的事件名称
-MODEL_EVENTS: Set[str] = {
+MODEL_EVENTS: set[str] = {
     'before_insert', 'after_insert',
     'before_update', 'after_update',
     'before_delete', 'after_delete',
     'before_bulk_insert', 'after_bulk_insert',
     'before_bulk_update', 'after_bulk_update',
 }
-STORAGE_EVENTS: Set[str] = {
+STORAGE_EVENTS: set[str] = {
     'before_flush', 'after_flush',
 }
-ALL_EVENTS: Set[str] = MODEL_EVENTS | STORAGE_EVENTS
-
+ALL_EVENTS: set[str] = MODEL_EVENTS | STORAGE_EVENTS
 
 class EventManager:
     """
@@ -57,11 +57,11 @@ class EventManager:
 
     def __init__(self) -> None:
         # Model 级: {(model_class, event_name): [callbacks]}
-        self._model_listeners: Dict[Tuple[type, str], List[Callable[..., Any]]] = {}
+        self._model_listeners: dict[tuple[type, str], list[Callable[..., Any]]] = {}
         # Storage 级: {(id(storage), event_name): [callbacks]}
-        self._storage_listeners: Dict[Tuple[int, str], List[Callable[..., Any]]] = {}
+        self._storage_listeners: dict[tuple[int, str], list[Callable[..., Any]]] = {}
         # 保存 storage 引用，防止 id 复用
-        self._storage_refs: Dict[int, Any] = {}
+        self._storage_refs: dict[int, Any] = {}
 
     def listen(self, target: Any, event_name: str, fn: Callable[..., Any]) -> None:
         """
@@ -135,7 +135,7 @@ class EventManager:
         for fn in self._model_listeners.get(key, []):
             fn(instance)
 
-    def dispatch_model_bulk(self, model_class: type, event_name: str, instances: List[Any]) -> None:
+    def dispatch_model_bulk(self, model_class: type, event_name: str, instances: list[Any]) -> None:
         """
         分发 Model 级批量事件
 
@@ -181,7 +181,6 @@ class EventManager:
             for sk in storage_keys:
                 del self._storage_listeners[sk]
             self._storage_refs.pop(sid, None)
-
 
 # 全局单例
 event = EventManager()

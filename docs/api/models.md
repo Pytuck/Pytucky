@@ -97,7 +97,7 @@ def declarative_base(
     crud: bool = False,
     sync_schema: bool = False,
     sync_options: SyncOptions | None = None
-) -> Type[PureBaseModel] | Type[CRUDBaseModel]
+) -> type[PureBaseModel] | type[CRUDBaseModel]
 ```
 
 ### 参数
@@ -112,16 +112,15 @@ def declarative_base(
 ### 示例
 
 ```python
-from typing import Type
 from pytucky import Storage, Column, PureBaseModel, CRUDBaseModel, declarative_base
 
-db = Storage(file_path='mydb.pytucky')
+db = Storage(file_path='mydb.pytuck')
 
 # 纯模型
-Base: Type[PureBaseModel] = declarative_base(db)
+Base: type[PureBaseModel] = declarative_base(db)
 
 # Active Record
-Base: Type[CRUDBaseModel] = declarative_base(db, crud=True)
+Base: type[CRUDBaseModel] = declarative_base(db, crud=True)
 
 # 自动同步 schema
 Base = declarative_base(db, sync_schema=True)
@@ -152,10 +151,10 @@ Base = declarative_base(db, sync_schema=True)
 def to_dict(
     self,
     use_column_names: bool = False,
-    include: Set[str] | None = None,
-    exclude: Set[str] | None = None,
+    include: set[str] | None = None,
+    exclude: set[str] | None = None,
     depth: int = 0,
-) -> Dict[str, Any]
+) -> dict[str, Any]
 ```
 
 转换为字典。`depth > 0` 时展开 Relationship。
@@ -166,8 +165,8 @@ def to_dict(
 def to_json(
     self,
     use_column_names: bool = False,
-    include: Set[str] | None = None,
-    exclude: Set[str] | None = None,
+    include: set[str] | None = None,
+    exclude: set[str] | None = None,
     depth: int = 0,
     ensure_ascii: bool = False,
     indent: int | None = None,
@@ -244,7 +243,7 @@ Active Record 基类。模型自带 CRUD 方法，继承自 PureBaseModel。
 ### 示例
 
 ```python
-Base: Type[CRUDBaseModel] = declarative_base(db, crud=True)
+Base: type[CRUDBaseModel] = declarative_base(db, crud=True)
 
 class User(Base):
     __tablename__ = 'users'
@@ -276,7 +275,7 @@ pks = User.bulk_insert(users)
 
 ## Relationship
 
-关联关系描述符。支持一对多和多对一关系的延迟加载。
+关联关系描述符。支持一对多、多对一，以及显式跨 `Storage` 的延迟读取。
 
 ```python
 from pytucky import Relationship
@@ -288,7 +287,7 @@ from pytucky import Relationship
 |------|------|--------|------|
 | `target_model` | str \| Type | 必填 | 目标模型类或表名 |
 | `foreign_key` | str | 必填 | 外键字段名 |
-| `lazy` | bool | True | 是否延迟加载 |
+| `storage` | Storage \| None | None | 目标数据所在的 Storage；为空时使用目标模型自己的 `__storage__` |
 | `back_populates` | str \| None | None | 反向关联属性名 |
 | `uselist` | bool \| None | None | 强制列表/单个（None 自动判断） |
 
@@ -301,15 +300,49 @@ class Order(Base):
     user_id = Column(int, foreign_key=('users', 'id'))
     amount = Column(float)
     # 多对一
-    user: Optional[User] = Relationship('users', foreign_key='user_id')  # type: ignore
+    user: User | None = Relationship('users', foreign_key='user_id')  # type: ignore
 
 class User(Base):
     __tablename__ = 'users'
     id = Column(int, primary_key=True)
     name = Column(str)
     # 一对多
-    orders: List[Order] = Relationship('orders', foreign_key='user_id')  # type: ignore
+    orders: list[Order] = Relationship('orders', foreign_key='user_id')  # type: ignore
 ```
+
+### 跨 Storage 示例
+
+```python
+base_db = Storage(file_path="base.pytuck")
+user_db = Storage(file_path="user.pytuck")
+
+BaseBase = declarative_base(base_db, crud=True)
+BaseUser = declarative_base(user_db, crud=True)
+
+class BaseItem(BaseBase):
+    __tablename__ = "base_items"
+    id = Column(int, primary_key=True)
+    name = Column(str)
+
+class UserItem(BaseUser):
+    __tablename__ = "user_items"
+    id = Column(int, primary_key=True)
+    base_item_id = Column(int)
+    nickname = Column(str)
+    base_item: BaseItem | None = Relationship(
+        "base_items",
+        foreign_key="base_item_id",
+        storage=base_db,
+    )  # type: ignore
+```
+
+这里 `UserItem` 仍然写入 `user_db`，但 `user_item.base_item` 会从 `base_db` 读取。
+
+### 注意事项
+
+- `Relationship` 仍然默认惰性加载，不再提供 `lazy` 参数
+- 跨 `Storage` relationship 仅支持读取与 `prefetch()` 预取
+- 仍然不支持 join
 
 ### 判断规则
 
