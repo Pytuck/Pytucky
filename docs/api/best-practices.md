@@ -191,3 +191,20 @@ from pytucky import Storage, declarative_base, Session, Column
 | 迁移工具 | tools.py | 无（单格式无需迁移） |
 | Native SQL | 支持 | 不支持 |
 | 懒加载配置 | lazy_load 参数 | 默认启用，无需配置 |
+
+### 最小迁移步骤
+
+- 把 `from pytuck ...` 改为 `from pytucky ...`
+- 保持原有 PTK7 文件即可继续使用，无需数据迁移
+- 若原项目显式传入 `.pytucky` 后缀，可继续保留；新项目默认推荐 `.pytuck`
+
+### 加密兼容说明
+
+Pytucky 与 pytuck 共享 PTK7 格式，以下加密等级已验证可双向互读互写：
+
+- `None`
+- `low`
+- `medium`
+- `high`
+
+使用加密文件时，双方需要保持相同密码；只要密码正确，便可以在两个库之间继续 reopen、查询和 flush。

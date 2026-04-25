@@ -131,14 +131,14 @@
 - [x] 重新在当前代码上跑一次 `pytucky vs pytuck` benchmark，并记录当前环境下的结果
   - 相关位置：`tests/benchmark/benchmark.py`
 - [x] 如结果更新，同步刷新 `README.md` 与 `docs/guide/benchmark.md`
-- [ ] 去掉 benchmark 中对源码路径的硬编码依赖，优先验证安装态行为
+- [x] 去掉 benchmark 中对源码路径的硬编码依赖，优先验证安装态行为
 
 ### 12. 校正文档中的过时信息
 
 - [x] 校正 README 中过时版本号与测试规模描述
-- [ ] 检查 `docs/` 下是否还保留旧后缀、旧测试数、旧阶段性表述
-- [ ] 按需要补一段简明迁移说明：`import pytuck` → `import pytucky`
-- [ ] 按需要补一段加密兼容说明：`None / low / medium / high` 与 `pytuck` 的互通范围
+- [x] 检查 `docs/` 下是否还保留旧后缀、旧测试数、旧阶段性表述
+- [x] 按需要补一段简明迁移说明：`import pytuck` → `import pytucky`
+- [x] 按需要补一段加密兼容说明：`None / low / medium / high` 与 `pytuck` 的互通范围
 
 ---
 
