@@ -17,9 +17,11 @@ from ..common.exceptions import (
     ValidationError,
 )
 from ..core.orm import Column
+from ..core.index import BaseIndex
 from ..core.types import TypeRegistry
 from .format import (
     NULL_BITMAP_STRUCT,
+    PK_DIR_INT_STRUCT,
     ColumnIndexMeta,
     FileHeader,
     PkDirEntry,
@@ -234,6 +236,87 @@ class Store:
                     state.index_meta = self._decode_index_meta(meta_blob, ref)
                 tables[ref.name] = state
             self._tables = tables
+
+    def _build_lazy_indexes(
+        self,
+        state: TableState,
+        hash_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+        sorted_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+    ) -> dict[str, BaseIndex]:
+        indexes: dict[str, BaseIndex] = {}
+        for col_name in state.index_meta:
+            col_obj = next((column for column in state.columns if column.name == col_name), None)
+            if col_obj is None:
+                continue
+            if col_obj.index == 'sorted':
+                indexes[col_name] = sorted_index_factory(col_name, self, state.name, col_obj)
+            else:
+                indexes[col_name] = hash_index_factory(col_name, self, state.name, col_obj)
+        return indexes
+
+    def _bind_lazy_table(
+        self,
+        table: Any,
+        state: TableState,
+        backend: Any,
+        file_path: Path,
+        hash_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+        sorted_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+    ) -> None:
+        from ..core.storage import _PkOffsetView
+
+        table.next_id = state.next_id
+        table._backend = backend
+        table._data_file = file_path
+        table._lazy_loaded = True
+        table._pk_offsets = _PkOffsetView(state.pk_index)
+        table.indexes = self._build_lazy_indexes(state, hash_index_factory, sorted_index_factory)
+
+    @_store_locked
+    def load_tables(
+        self,
+        backend: Any,
+        file_path: Path,
+        *,
+        hash_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+        sorted_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+    ) -> dict[str, Any]:
+        from ..core.storage import Table
+
+        tables: dict[str, Any] = {}
+        for name, state in self._tables.items():
+            table = Table(state.name, state.columns, state.primary_key, None)
+            self._bind_lazy_table(
+                table,
+                state,
+                backend,
+                file_path,
+                hash_index_factory,
+                sorted_index_factory,
+            )
+            table.reset_dirty()
+            tables[name] = table
+        return tables
+
+    @_store_locked
+    def rebind_lazy_table(
+        self,
+        table: Any,
+        state: TableState,
+        backend: Any,
+        file_path: Path,
+        *,
+        hash_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+        sorted_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+    ) -> None:
+        self._bind_lazy_table(
+            table,
+            state,
+            backend,
+            file_path,
+            hash_index_factory,
+            sorted_index_factory,
+        )
 
     def _select_record(self, table_name: str, pk: Any, *, copy_result: bool) -> dict[str, Any]:
         state = self.table_state(table_name)
@@ -932,7 +1015,7 @@ class Store:
             blob = self._decrypt_region(ref.pk_dir_offset, blob)
         else:
             blob = self._read_region(ref.pk_dir_offset, ref.pk_dir_size)
-        entry_size = PkDirEntry(pk=0, offset=0, length=0).pack_int().__len__()
+        entry_size = PK_DIR_INT_STRUCT.size
         if ref.record_count == 0:
             return pk_index
         if len(blob) < entry_size:
@@ -940,20 +1023,21 @@ class Store:
         if len(blob) % entry_size != 0:
             raise SerializationError("PTK7 pk dir size is invalid")
 
-        entries = []
+        data_end = ref.data_offset + max(1, ref.data_size)
+        needs_rebase = False
         offset = 0
         while offset < len(blob):
-            entries.append(PkDirEntry.unpack_int(blob[offset : offset + entry_size]))
+            entry = PkDirEntry.unpack_int(blob[offset : offset + entry_size])
+            if not (ref.data_offset <= entry.offset < data_end):
+                needs_rebase = True
+            pk_index[entry.pk] = (entry.offset, entry.length)
             offset += entry_size
 
-        data_end = ref.data_offset + max(1, ref.data_size)
-        is_absolute = all(ref.data_offset <= entry.offset < data_end for entry in entries)
-        for entry in entries:
-            if is_absolute:
-                abs_off = entry.offset
-            else:
-                abs_off = ref.data_offset + entry.offset
-            pk_index[entry.pk] = (abs_off, entry.length)
+        if needs_rebase:
+            return {
+                pk: (ref.data_offset + entry_offset, length)
+                for pk, (entry_offset, length) in pk_index.items()
+            }
         return pk_index
 
     def _decode_index_meta(self, blob: bytes, ref: TableBlockRef) -> dict[str, ColumnIndexMeta]:

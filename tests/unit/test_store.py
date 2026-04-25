@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from pytucky import Column
 from pytucky.common.exceptions import RecordNotFoundError
 from pytucky.backends import store as store_module
+from pytucky.backends.format import PkDirEntry, TableBlockRef
 from pytucky.backends.store import Store
 
 
@@ -236,3 +238,30 @@ def test_reopened_select_reuses_decode_layout_cache(
     assert reopened.select("users", 2)["name"] == "Bob"
     assert calls["payload_columns"] == 1
     assert calls["codec"] == 2
+
+
+def test_read_pk_dir_rebases_legacy_relative_offsets(tmp_path: Path) -> None:
+    store = Store(tmp_path / "legacy-relative.pytucky")
+    blob = b"".join(
+        [
+            PkDirEntry(pk=1, offset=0, length=12).pack_int(),
+            PkDirEntry(pk=2, offset=12, length=16).pack_int(),
+        ]
+    )
+    ref = TableBlockRef(
+        name="users",
+        record_count=2,
+        next_id=3,
+        data_offset=1024,
+        data_size=28,
+        pk_dir_offset=0,
+        pk_dir_size=len(blob),
+        index_meta_offset=0,
+        index_meta_size=0,
+        index_data_offset=0,
+        index_data_size=0,
+    )
+
+    pk_index = store._read_pk_dir(io.BytesIO(blob), ref)
+
+    assert pk_index == {1: (1024, 12), 2: (1036, 16)}

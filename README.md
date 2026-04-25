@@ -171,19 +171,20 @@ finally:
 
 ## 性能（100,000 条记录）
 
-与 Pytuck 1.2.1 同机、同 schema 对比（Linux / Python 3.12.3）：
+当前基准环境：Darwin 25.4.0 / Python 3.13.11。对 `pytucky 1.1.2` 与 `pytuck 1.3.0` 使用**相同 schema、相同数据量、相同测试流程**连续运行 **3 轮均值**，唯一变量是库实现：
 
-| 指标 | Pytucky 1.0.0 | Pytuck 1.2.1 | 变化 |
+| 指标 | Pytucky 1.1.2 | Pytuck 1.3.0 | 变化 |
 |------|---------------|--------------|------|
-| insert | 800.1ms | 780.5ms | +2.5% |
-| save | 592.3ms | 597.2ms | -0.8% |
-| query_pk (×100) | 1.86ms | 1.62ms | +14.5% |
-| query_indexed (×100) | 1.79ms | 1.72ms | +3.5% |
-| load | 122.6ms | 132.3ms | **-7.3%** |
-| reopen | 124.0ms | 132.1ms | **-6.1%** |
+| insert | 370.5ms | 343.2ms | +8.0% |
+| save | 274.8ms | 239.4ms | +14.8% |
+| query_pk (×100) | 0.86ms | 0.71ms | +20.5% |
+| query_indexed (×100) | 0.81ms | 0.66ms | +21.4% |
+| load | 72.9ms | 53.0ms | +37.5% |
+| reopen | 69.7ms | 48.3ms | +44.3% |
+| reopen_first_query | 73.3μs | 50.7μs | +44.6% |
 | file_size | 9.97MB | 9.97MB | 0% |
 
-两个库共享 PTK7 格式，性能基本持平。详见 [docs/guide/benchmark.md](docs/guide/benchmark.md)。
+两个库共享 PTK7 格式。更完整的基准说明见 [docs/guide/benchmark.md](docs/guide/benchmark.md)。
 
 ## 文档
 

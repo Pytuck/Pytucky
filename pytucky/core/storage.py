@@ -10,7 +10,7 @@ import copy
 from functools import wraps
 from pathlib import Path
 from threading import RLock
-from typing import Any, Callable, Concatenate, Generator, Iterator, MutableMapping, ParamSpec, TYPE_CHECKING, Sequence, TypeVar
+from typing import Any, Callable, Concatenate, Generator, Iterator, MutableMapping, ParamSpec, TYPE_CHECKING, Sequence, TypeVar, cast
 from contextlib import contextmanager
 
 from ..common.options import PytuckBackendOptions, SyncOptions, SyncResult
@@ -30,6 +30,7 @@ from ..common.exceptions import (
 
 if TYPE_CHECKING:
     from ..backends.base import StorageBackend
+    from ..backends.store import Store
     from .orm import PureBaseModel
 
 P = ParamSpec("P")
@@ -590,7 +591,8 @@ class Table:
         """
         从文件读取单条记录（懒加载模式）
 
-        委托给 backend.read_lazy_record()，支持加密和非加密文件
+        已知表名与主键时，优先直达底层 store.select_raw()，减少 backend adapter
+        与额外包装层；若后端不暴露 store，则回退到通用 backend.read_lazy_record()。
 
         Args:
             pk: 主键值
@@ -610,9 +612,12 @@ class Table:
         if pk not in self._pk_offsets:
             raise RecordNotFoundError(self.name, pk)
 
-        offset: int = self._pk_offsets[pk]  # type: ignore
+        store = cast("Store | None", getattr(self._backend, 'store', None))
+        if store is not None:
+            return store.select_raw(self.name, pk)
 
-        record = self._backend.read_lazy_record(
+        offset: int = self._pk_offsets[pk]  # type: ignore
+        return self._backend.read_lazy_record(
             self._data_file,
             offset,
             self.columns,
@@ -620,7 +625,6 @@ class Table:
             table_name=self.name,
             copy_result=False,
         )
-        return record
 
     def has_pk(self, pk: Any) -> bool:
         """判断主键是否存在（包含懒加载未入内存的记录）"""
@@ -1652,12 +1656,17 @@ class Storage:
             记录字典
         """
         table = self.get_table(table_name)
+        normalized_pk = table._normalize_pk(pk)
 
-        record = table.get(pk)
+        store = cast("Store | None", getattr(table._backend, 'store', None)) if table._backend is not None else None
+        if table.primary_key and table._lazy_loaded and store is not None:
+            return store.select(table_name, normalized_pk)
+
+        record = table.get(normalized_pk)
         record_copy = record.copy()
         # 无主键表：注入内部 rowid
         if not table.primary_key:
-            record_copy[PSEUDO_PK_NAME] = pk
+            record_copy[PSEUDO_PK_NAME] = normalized_pk
         return record_copy
 
     @_storage_locked

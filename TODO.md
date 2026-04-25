@@ -128,9 +128,9 @@
 
 ### 11. 复核 benchmark 与文档描述
 
-- [ ] 重新在当前代码上跑一次 `pytucky vs pytuck` benchmark
+- [x] 重新在当前代码上跑一次 `pytucky vs pytuck` benchmark，并记录当前环境下的结果
   - 相关位置：`tests/benchmark/benchmark.py`
-- [ ] 如结果更新，同步刷新 `README.md` 与 `docs/guide/benchmark.md`
+- [x] 如结果更新，同步刷新 `README.md` 与 `docs/guide/benchmark.md`
 - [ ] 去掉 benchmark 中对源码路径的硬编码依赖，优先验证安装态行为
 
 ### 12. 校正文档中的过时信息
