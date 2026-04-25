@@ -1655,18 +1655,19 @@ class Storage:
         Returns:
             记录字典
         """
-        table = self.get_table(table_name)
-        normalized_pk = table._normalize_pk(pk)
+        table = self.tables.get(table_name)
+        if table is None:
+            raise TableNotFoundError(table_name)
 
         store = cast("Store | None", getattr(table._backend, 'store', None)) if table._backend is not None else None
         if table.primary_key and table._lazy_loaded and store is not None:
-            return store.select(table_name, normalized_pk)
+            return store.select(table_name, pk)
 
-        record = table.get(normalized_pk)
+        record = table.get(pk)
         record_copy = record.copy()
         # 无主键表：注入内部 rowid
         if not table.primary_key:
-            record_copy[PSEUDO_PK_NAME] = normalized_pk
+            record_copy[PSEUDO_PK_NAME] = table._normalize_pk(pk)
         return record_copy
 
     @_storage_locked

@@ -91,6 +91,38 @@ def test_session_get_uses_direct_storage_select(tmp_path: Path, monkeypatch) -> 
 
 
 @pytest.mark.feature
+def test_select_filter_by_pk_keeps_offset_slice_semantics(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "fastpath-pk-offset.pytucky"
+
+    db = Storage(file_path=db_path)
+    Base = declarative_base(db)
+
+    class User(Base):
+        __tablename__ = "users"
+        id = Column(int, primary_key=True)
+        name = Column(str)
+
+    db.create_table("users", [Column(int, name='id', primary_key=True), Column(str, name='name')])
+    pk = db.insert("users", {"name": "Alice"})
+    db.flush()
+    db.close()
+
+    reopened = Storage(file_path=db_path)
+    session = Session(reopened)
+
+    assert hasattr(reopened, 'backend') and hasattr(reopened.backend, 'store')
+    calls = {"count": 0}
+    _patch_store_select_calls(reopened.backend.store, monkeypatch, calls)
+
+    rows = session.execute(select(User).filter_by(id=pk).offset(1)).all()
+
+    assert rows == []
+    assert calls["count"] == 1
+    session.close()
+    reopened.close()
+
+
+@pytest.mark.feature
 def test_storage_query_limit_offset_stops_after_requested_window(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "query-window-fastpath.pytucky"
     db = Storage(file_path=db_path)
