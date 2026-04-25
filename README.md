@@ -171,9 +171,9 @@ finally:
 
 ## 性能（10,000 条记录）
 
-当前基准环境：Darwin 25.4.0 / Python 3.13.11。对 `pytucky 1.1.2` 与 `pytuck 1.3.0` 使用**相同 schema、相同数据量、相同测试流程**连续运行 **3 轮均值**，唯一变量是库实现：
+当前基准环境：Darwin 25.4.0 / Python 3.13.11。对 `pytucky 1.2.0` 与 `pytuck 1.3.0` 使用**相同 schema、相同数据量、相同测试流程**连续运行 **3 轮均值**，唯一变量是库实现：
 
-| 指标 | Pytucky 1.1.2 | Pytuck 1.3.0 | 变化 |
+| 指标 | Pytucky 1.2.0 | Pytuck 1.3.0 | 变化 |
 |------|---------------|--------------|------|
 | insert | 35.2ms | 30.1ms | +17.2% |
 | save | 25.2ms | 22.2ms | +13.1% |
@@ -223,7 +223,7 @@ from pytucky import Storage, declarative_base, Session, Column
 uv run pytest tests/ -v
 ```
 
-当前：**204 passed**
+当前：**205 passed**
 
 ## 项目目标
 
