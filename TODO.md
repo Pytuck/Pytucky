@@ -14,7 +14,7 @@
 - [x] 已支持 `None / low / medium / high` 四档读写
 - [x] 已验证与真实 `pytuck` 双向互读互写
 - [x] 已实现懒加载、索引物化缓存、增量 flush、读句柄复用
-- [x] 当前测试规模已扩充到 **195 项**
+- [x] 当前测试规模已扩充到 **198 项**
 - [x] `mypy` 已清零，并补了 pytest 内的静态回归用例（校验 `mypy pytucky`）
 
 ---
@@ -71,11 +71,11 @@
 
 ### 5. 继续压缩懒加载单行读取热路径
 
-- [ ] 评估在 `Store` / `TableState` 侧缓存 payload layout / codec 解析结果
+- [x] 在 `Store` / `TableState` 侧缓存 payload layout / codec 解析结果
   - 相关位置：`pytucky/backends/store.py`、`pytucky/backends/format.py`
-- [ ] 评估内部 no-copy 快路径，减少 `select()` / `get()` 的重复 copy 成本
-  - 相关位置：`pytucky/core/storage.py`
-- [ ] 评估是否还有必要在 reopen 时复制整份 `_pk_offsets`
+- [x] 增加内部 no-copy 快路径，减少 `select()` / `get()` 的重复 copy 成本
+  - 相关位置：`pytucky/backends/base.py`、`pytucky/backends/backend_pytucky.py`、`pytucky/core/storage.py`
+- [x] 避免在 reopen 时复制整份 `_pk_offsets`
   - 相关位置：`pytucky/backends/backend_pytucky.py`、`pytucky/core/storage.py`
 
 **目标**：进一步优化 reopen 后点查与懒加载首查延迟。
