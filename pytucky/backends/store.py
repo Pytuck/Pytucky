@@ -79,6 +79,8 @@ class TableState:
     pk_index: dict[Any, tuple[int, int]] = field(default_factory=dict)
     index_meta: dict[str, Any] = field(default_factory=dict)
     overlay: TableOverlay = field(default_factory=TableOverlay)
+    decode_columns: list[Column] | None = None
+    decode_codecs: list[Any] | None = None
 
 @dataclass(frozen=True)
 class _EncodedTable:
@@ -127,6 +129,13 @@ class Store:
             data_offset=0,
             data_size=0,
         )
+
+    def _get_decode_layout(self, state: TableState) -> tuple[list[Column], list[Any]]:
+        if state.decode_columns is None or state.decode_codecs is None:
+            decode_columns = _payload_columns(state.columns, state.primary_key)
+            state.decode_columns = decode_columns
+            state.decode_codecs = [TypeRegistry.get_codec(column.col_type)[1] for column in decode_columns]
+        return state.decode_columns, state.decode_codecs
 
     @_store_locked
     def close(self) -> None:
@@ -226,26 +235,36 @@ class Store:
                 tables[ref.name] = state
             self._tables = tables
 
-    @_store_locked
-    def select(self, table_name: str, pk: Any) -> dict[str, Any]:
+    def _select_record(self, table_name: str, pk: Any, *, copy_result: bool) -> dict[str, Any]:
         state = self.table_state(table_name)
         pk = self._normalize_pk(state, pk)
         overlay = state.overlay
         if pk in overlay.deleted:
             raise RecordNotFoundError(table_name, pk)
         if pk in overlay.updated:
-            return dict(overlay.updated[pk])
+            record = overlay.updated[pk]
+            return dict(record) if copy_result else record
         if pk in overlay.inserted:
-            return dict(overlay.inserted[pk])
+            record = overlay.inserted[pk]
+            return dict(record) if copy_result else record
         if pk in overlay.row_cache:
-            return dict(overlay.row_cache[pk])
+            record = overlay.row_cache[pk]
+            return dict(record) if copy_result else record
         try:
             offset, length = state.pk_index[pk]
         except KeyError as exc:
             raise RecordNotFoundError(table_name, pk) from exc
         record = self._read_row_at(state, pk, offset, length)
         overlay.row_cache[pk] = record
-        return dict(record)
+        return dict(record) if copy_result else record
+
+    @_store_locked
+    def select(self, table_name: str, pk: Any) -> dict[str, Any]:
+        return self._select_record(table_name, pk, copy_result=True)
+
+    @_store_locked
+    def select_raw(self, table_name: str, pk: Any) -> dict[str, Any]:
+        return self._select_record(table_name, pk, copy_result=False)
 
     @_store_locked
     def insert(self, table_name: str, data: dict[str, Any]) -> Any:
@@ -612,8 +631,7 @@ class Store:
             and pk not in state.overlay.updated
         ]
         if disk_pks:
-            payload_cols = _payload_columns(state.columns, state.primary_key)
-            codecs = [TypeRegistry.get_codec(c.col_type)[1] for c in payload_cols]
+            decode_columns, decode_codecs = self._get_decode_layout(state)
             # If cipher is None, bulk read the entire data blob for performance.
             if self._cipher is None:
                 data_blob = self._read_region(state.data_offset, state.data_size)
@@ -623,7 +641,13 @@ class Store:
                     row_blob = data_blob[rel_off:rel_off + length]
                     payload_length = ROW_LENGTH_STRUCT.unpack(row_blob[:ROW_LENGTH_STRUCT.size])[0]
                     payload = row_blob[ROW_LENGTH_STRUCT.size:]
-                    record = decode_row(state.columns, payload, pk_name=state.primary_key, codecs=codecs)
+                    record = decode_row(
+                        state.columns,
+                        payload,
+                        pk_name=state.primary_key,
+                        payload_columns=decode_columns,
+                        codecs=decode_codecs,
+                    )
                     if state.primary_key is not None:
                         record[state.primary_key] = pk
                     live[pk] = record
@@ -636,7 +660,13 @@ class Store:
                         raise SerializationError("Not enough data to decode row length")
                     payload_length = ROW_LENGTH_STRUCT.unpack(row_blob[:ROW_LENGTH_STRUCT.size])[0]
                     payload = row_blob[ROW_LENGTH_STRUCT.size:]
-                    record = decode_row(state.columns, payload, pk_name=state.primary_key, codecs=codecs)
+                    record = decode_row(
+                        state.columns,
+                        payload,
+                        pk_name=state.primary_key,
+                        payload_columns=decode_columns,
+                        codecs=decode_codecs,
+                    )
                     if state.primary_key is not None:
                         record[state.primary_key] = pk
                     live[pk] = record
@@ -677,7 +707,14 @@ class Store:
             raise SerializationError(
                 f"Row payload length mismatch: expected {payload_length}, got {len(payload)}"
             )
-        record = decode_row(state.columns, payload, pk_name=state.primary_key)
+        decode_columns, decode_codecs = self._get_decode_layout(state)
+        record = decode_row(
+            state.columns,
+            payload,
+            pk_name=state.primary_key,
+            payload_columns=decode_columns,
+            codecs=decode_codecs,
+        )
         if state.primary_key is not None:
             record[state.primary_key] = pk
         return record

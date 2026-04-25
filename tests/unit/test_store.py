@@ -6,6 +6,7 @@ import pytest
 
 from pytucky import Column
 from pytucky.common.exceptions import RecordNotFoundError
+from pytucky.backends import store as store_module
 from pytucky.backends.store import Store
 
 
@@ -203,3 +204,35 @@ def test_flush_materializes_live_records_once_per_table(tmp_path: Path, monkeypa
     store.flush()
 
     assert calls["count"] == 1
+
+
+def test_reopened_select_reuses_decode_layout_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_path = tmp_path / "reader-layout-cache.pytucky"
+    store = build_store(file_path)
+    store.insert("users", {"name": "Alice", "age": 18})
+    store.insert("users", {"name": "Bob", "age": 20})
+    store.flush()
+
+    reopened = Store(file_path)
+    calls = {"payload_columns": 0, "codec": 0}
+    original_payload_columns = store_module._payload_columns
+    original_get_codec = store_module.TypeRegistry.get_codec
+
+    def counting_payload_columns(columns, pk_name):
+        calls["payload_columns"] += 1
+        return original_payload_columns(columns, pk_name)
+
+    def counting_get_codec(col_type):
+        calls["codec"] += 1
+        return original_get_codec(col_type)
+
+    monkeypatch.setattr(store_module, "_payload_columns", counting_payload_columns)
+    monkeypatch.setattr(store_module.TypeRegistry, "get_codec", counting_get_codec)
+
+    assert reopened.select("users", 1)["name"] == "Alice"
+    assert reopened.select("users", 2)["name"] == "Bob"
+    assert calls["payload_columns"] == 1
+    assert calls["codec"] == 2

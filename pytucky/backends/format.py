@@ -264,15 +264,22 @@ def encode_row(columns: list[Column], record: dict[str, Any], pk_name: str | Non
         payload.extend(codec.encode(value))
     return NULL_BITMAP_STRUCT.pack(null_bits) + bytes(payload)
 
-def decode_row(columns: list[Column], payload: bytes, pk_name: str | None = None, *, codecs: list | None = None) -> dict[str, Any]:
-    payload_columns = _payload_columns(columns, pk_name)
+def decode_row(
+    columns: list[Column],
+    payload: bytes,
+    pk_name: str | None = None,
+    *,
+    payload_columns: list[Column] | None = None,
+    codecs: list[Any] | None = None,
+) -> dict[str, Any]:
+    row_columns = payload_columns if payload_columns is not None else _payload_columns(columns, pk_name)
     if len(payload) < NULL_BITMAP_STRUCT.size:
         raise SerializationError("Not enough data to decode row null bitmap")
 
     null_bits = NULL_BITMAP_STRUCT.unpack(payload[: NULL_BITMAP_STRUCT.size])[0]
     offset = NULL_BITMAP_STRUCT.size
     decoded: dict[str, Any] = {}
-    for index, column in enumerate(payload_columns):
+    for index, column in enumerate(row_columns):
         assert column.name is not None
         if null_bits & (1 << index):
             decoded[column.name] = None
