@@ -636,10 +636,14 @@ class PureBaseModel:
         Returns:
             对应的属性名，如果未找到返回 None
         """
-        for attr_name, column in cls.__columns__.items():
-            if column.name == col_name:
-                return attr_name
-        return None
+        mapping = getattr(cls, '_column_name_to_attr_cache', None)
+        if mapping is None or len(mapping) != len(cls.__columns__):
+            mapping = {
+                (column.name or attr_name): attr_name
+                for attr_name, column in cls.__columns__.items()
+            }
+            setattr(cls, '_column_name_to_attr_cache', mapping)
+        return mapping.get(col_name)
 
     def to_dict(
         self,

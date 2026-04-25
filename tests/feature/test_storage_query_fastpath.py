@@ -1,6 +1,7 @@
 import pytest
 from pathlib import Path
 from pytucky import Storage, declarative_base, Session, Column, select
+from pytucky.query.builder import Condition
 
 
 def _patch_store_select_calls(store, monkeypatch, calls) -> None:
@@ -120,6 +121,33 @@ def test_select_filter_by_pk_keeps_offset_slice_semantics(tmp_path: Path, monkey
     assert calls["count"] == 1
     session.close()
     reopened.close()
+
+
+@pytest.mark.feature
+def test_storage_query_indexed_equality_skips_condition_recheck(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "query-index-equality-fastpath.pytucky"
+    db = Storage(file_path=db_path)
+    db.create_table(
+        "users",
+        [
+            Column(int, name='id', primary_key=True),
+            Column(str, name='name', index=True),
+        ],
+    )
+    db.insert("users", {"name": "Alice"})
+    db.insert("users", {"name": "Bob"})
+
+    cond = Condition("name", "=", "Alice")
+
+    def fail_if_called(_record):
+        raise AssertionError("indexed equality query should not re-evaluate the condition")
+
+    monkeypatch.setattr(cond, 'evaluate', fail_if_called)
+
+    rows = db.query("users", [cond])
+
+    assert rows == [{"id": 1, "name": "Alice"}]
+    db.close()
 
 
 @pytest.mark.feature

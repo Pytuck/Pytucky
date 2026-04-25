@@ -1961,6 +1961,31 @@ class Storage:
         if limit == 0:
             return []
 
+        table = self.get_table(table_name)
+        if (
+            order_by is None
+            and offset >= 0
+            and (limit is None or limit > 0)
+            and len(conditions) == 1
+            and not isinstance(conditions[0], CompositeCondition)
+        ):
+            condition = conditions[0]
+            if condition.operator == '=' and condition.field in table.indexes:
+                results = []
+                skipped = 0
+                for pk in table.indexes[condition.field].lookup(condition.value):
+                    try:
+                        record = table.get(pk)
+                    except RecordNotFoundError:
+                        continue
+                    if skipped < offset:
+                        skipped += 1
+                        continue
+                    results.append(self._build_result_record(table, pk, record))
+                    if limit is not None and len(results) >= limit:
+                        break
+                return results
+
         table, candidate_pks, remaining_simple_conditions, composite_conditions = self._build_query_plan(
             table_name,
             conditions,
