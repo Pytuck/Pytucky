@@ -7,6 +7,7 @@ import json
 import platform
 import shutil
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -223,9 +224,7 @@ def build_temp_dir(keep: bool) -> Path:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         return OUTPUT_DIR
 
-    temp_dir = Path.cwd() / TEMP_DIR_NAME
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    return temp_dir
+    return Path(tempfile.mkdtemp(prefix=f"{TEMP_DIR_NAME.lstrip('.')}"))
 
 def cleanup_temp_dir(temp_dir: Path, keep: bool) -> None:
     if keep or not temp_dir.exists():

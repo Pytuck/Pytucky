@@ -34,7 +34,8 @@ def test_benchmark_schema(tmp_path: Path) -> None:
 
 
 @pytest.mark.benchmark
-def test_output_json(tmp_path: Path) -> None:
+def test_output_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
     out_file = tmp_path / "out.json"
     args = argparse.Namespace(
         count=1,
@@ -48,6 +49,7 @@ def test_output_json(tmp_path: Path) -> None:
     assert out_file.exists()
     assert len(results) == 1
     assert results[0]["engine"] == "pytucky"
+    assert not (tmp_path / bench_module.TEMP_DIR_NAME).exists()
 
     payload = json.loads(out_file.read_text(encoding="utf-8"))
     assert payload["record_count"] == 1
@@ -56,3 +58,19 @@ def test_output_json(tmp_path: Path) -> None:
     assert "timestamp" in payload
     assert "system" in payload
     assert "python_version" in payload
+
+
+@pytest.mark.benchmark
+def test_build_temp_dir_uses_system_temp_outside_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    temp_dir = bench_module.build_temp_dir(False)
+    try:
+        assert temp_dir.exists()
+        assert temp_dir != tmp_path / bench_module.TEMP_DIR_NAME
+        assert tmp_path not in temp_dir.parents
+    finally:
+        bench_module.cleanup_temp_dir(temp_dir, keep=False)
+
+    assert not temp_dir.exists()
+    assert not (tmp_path / bench_module.TEMP_DIR_NAME).exists()
