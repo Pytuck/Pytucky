@@ -14,7 +14,7 @@
 - [x] 已支持 `None / low / medium / high` 四档读写
 - [x] 已验证与真实 `pytuck` 双向互读互写
 - [x] 已实现懒加载、索引物化缓存、增量 flush、读句柄复用
-- [x] 当前测试规模已扩充到 **191 项**
+- [x] 当前测试规模已扩充到 **195 项**
 - [x] `mypy` 已清零，并补了 pytest 内的静态回归用例（校验 `mypy pytucky`）
 
 ---
@@ -49,22 +49,22 @@
 
 ### 3. 优化 `Session.flush()` 的 dirty update 路径
 
-- [ ] 将 dirty 对象按模型/表分组，尽量复用已有 `bulk_update()` 能力
+- [x] 将 dirty 对象按模型/表分组，尽量复用已有 `bulk_update()` 能力
   - 相关位置：`pytucky/core/session.py`、`pytucky/core/storage.py`
-- [ ] 去掉逐条 `update()` 后再 `select()` 回读的固定成本
+- [x] 去掉逐条 `update()` 后再 `select()` 回读的固定成本
   - 相关位置：`pytucky/core/session.py`
-- [ ] 保持 `before_update / after_update` 事件语义不变，并补测试覆盖
+- [x] 保持 `before_update / after_update` 事件语义不变，并补测试覆盖
   - 相关位置：`tests/feature/test_session_advanced.py`
 
 **目标**：降低批量更新时的额外读放大。
 
 ### 4. 优化 prefetch / `IN` 条件的 membership 成本
 
-- [ ] 将 `Condition('IN', value)` 的右值标准化为 `set` / `frozenset`（保留不可 hash 值的回退）
+- [x] 将 `Condition('IN', value)` 的右值标准化为 `set` / `frozenset`（保留不可 hash 值的回退）
   - 相关位置：`pytucky/query/builder.py`
-- [ ] 优化 `_prefetch_one_to_many()` 与 `_prefetch_many_to_one()` 的值收集方式，避免把大批量主键保留为线性查找列表
+- [x] 优化 `_prefetch_one_to_many()` 与 `_prefetch_many_to_one()` 的值收集方式，避免把大批量主键保留为线性查找列表
   - 相关位置：`pytucky/core/prefetch.py`
-- [ ] 增加大批量 prefetch 的回归测试或基准
+- [x] 增加大批量 prefetch 的回归测试
   - 相关位置：`tests/feature/test_relationship.py`
 
 **目标**：降低关系批量预取场景中的 `O(rows × ids)` 级别开销。
@@ -86,9 +86,9 @@
 
 ### 6. 固定依赖解析结果，提升 CI 可复现性
 
-- [ ] 不再忽略 `uv.lock`，提交锁文件
-  - 相关位置：`.gitignore`
-- [ ] CI 改为使用锁定依赖集，避免未来因上游版本漂移导致“代码没变但 CI 失败”
+- [x] 不再忽略 `uv.lock`，提交锁文件
+  - 相关位置：`.gitignore`、`uv.lock`
+- [x] CI 改为使用锁定依赖集，避免未来因上游版本漂移导致“代码没变但 CI 失败”
   - 相关位置：`.github/workflows/ci.yml`
 
 ### 7. 把类型检查与打包验证纳入 CI
@@ -97,19 +97,19 @@
   - 相关位置：`pytucky/core/orm.py`
 - [x] 新增 pytest 内的 `mypy` 静态回归用例，确保 `uv run python -m pytest` 可直接暴露类型回归
   - 相关位置：`tests/feature/test_mypy_typecheck.py`
-- [ ] CI 增加 `mypy` 检查
-  - 相关位置：`.github/workflows/ci.yml`、`pyproject.toml`
-- [ ] CI 增加 `python -m build` 与 wheel 安装 smoke test
+- [x] CI 增加 `mypy` 检查
   - 相关位置：`.github/workflows/ci.yml`
-- [ ] 验证安装态下 `py.typed`、公开 API 导出、基础导入路径可用
-  - 相关位置：`pyproject.toml`、`pytucky/__init__.py`
+- [x] CI 增加 `python -m build` 与 wheel 安装 smoke test
+  - 相关位置：`.github/workflows/ci.yml`
+- [x] 验证安装态下 `py.typed`、公开 API 导出、基础导入路径可用
+  - 相关位置：`.github/workflows/ci.yml`、`pytucky/__init__.py`
 
 ### 8. 调整测试矩阵与测试分层
 
-- [ ] 将 compat / benchmark 从主测试矩阵中拆分或降频执行
+- [x] 将 compat / benchmark 从主测试矩阵中拆分或降频执行
   - 相关位置：`.github/workflows/ci.yml`
-- [ ] 主矩阵优先保证 unit / feature 的快速反馈
-- [ ] 保留 system / benchmark，但避免拖慢所有平台和 Python 版本组合
+- [x] 主矩阵优先保证 unit / feature 的快速反馈
+- [x] 保留 system / benchmark，但避免拖慢所有平台和 Python 版本组合
 
 ---
 
