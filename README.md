@@ -169,20 +169,20 @@ finally:
 - 字符串目标省略 `storage` 时默认同库；跨库读取时再显式传 `storage=...`
 - 配置 `back_populates` 后，懒加载和 `prefetch()` 都会自动回填反向缓存
 
-## 性能（100,000 条记录）
+## 性能（10,000 条记录）
 
 当前基准环境：Darwin 25.4.0 / Python 3.13.11。对 `pytucky 1.1.2` 与 `pytuck 1.3.0` 使用**相同 schema、相同数据量、相同测试流程**连续运行 **3 轮均值**，唯一变量是库实现：
 
 | 指标 | Pytucky 1.1.2 | Pytuck 1.3.0 | 变化 |
 |------|---------------|--------------|------|
-| insert | 370.5ms | 343.2ms | +8.0% |
-| save | 274.8ms | 239.4ms | +14.8% |
-| query_pk (×100) | 0.86ms | 0.71ms | +20.5% |
-| query_indexed (×100) | 0.81ms | 0.66ms | +21.4% |
-| load | 72.9ms | 53.0ms | +37.5% |
-| reopen | 69.7ms | 48.3ms | +44.3% |
-| reopen_first_query | 73.3μs | 50.7μs | +44.6% |
-| file_size | 9.97MB | 9.97MB | 0% |
+| insert | 35.2ms | 30.1ms | +17.2% |
+| save | 25.2ms | 22.2ms | +13.1% |
+| query_pk (×100) | 0.75ms | 0.69ms | +9.4% |
+| query_indexed (×100) | 0.70ms | 0.64ms | +8.8% |
+| load | 4.71ms | 4.74ms | -0.6% |
+| reopen | 4.77ms | 4.72ms | +1.0% |
+| reopen_first_query | 32.6μs | 35.6μs | -8.2% |
+| file_size | 0.92MB | 0.92MB | 0% |
 
 两个库共享 PTK7 格式。更完整的基准说明见 [docs/guide/benchmark.md](docs/guide/benchmark.md)。
 
@@ -223,7 +223,7 @@ from pytucky import Storage, declarative_base, Session, Column
 uv run pytest tests/ -v
 ```
 
-当前：**200 passed**
+当前：**204 passed**
 
 ## 项目目标
 

@@ -2,17 +2,17 @@
 
 > 测试环境：Darwin 25.4.0 / Python 3.13.11
 >
-> 数据规模：100,000 条记录（6 列：id, name, email, age, score, active）
+> 数据规模：10,000 条记录（6 列：id, name, email, age, score, active）
 >
 > 轮次：3 轮均值
 >
-> 日期：2026-04-25
+> 日期：2026-04-26
 
 ## 测试指标
 
 | 指标 | 说明 |
 |------|------|
-| insert | 插入 100,000 条记录 + `session.commit()` |
+| insert | 插入 10,000 条记录 + `session.commit()` |
 | save | `db.flush()` 持久化到磁盘 |
 | query_pk | 100 次主键查询 |
 | query_indexed | 100 次索引等值查询 |
@@ -27,14 +27,14 @@
 
 | 指标 | Pytucky 1.1.2 | Pytuck 1.3.0 | 变化 |
 |------|---------------|--------------|------|
-| insert | 370.5ms | 343.2ms | +8.0% |
-| save | 274.8ms | 239.4ms | +14.8% |
-| query_pk | 0.86ms | 0.71ms | +20.5% |
-| query_indexed | 0.81ms | 0.66ms | +21.4% |
-| load | 72.9ms | 53.0ms | +37.5% |
-| reopen | 69.7ms | 48.3ms | +44.3% |
-| reopen_first_query | 73.3μs | 50.7μs | +44.6% |
-| file_size | 9.97MB | 9.97MB | 0% |
+| insert | 35.2ms | 30.1ms | +17.2% |
+| save | 25.2ms | 22.2ms | +13.1% |
+| query_pk | 0.75ms | 0.69ms | +9.4% |
+| query_indexed | 0.70ms | 0.64ms | +8.8% |
+| load | 4.71ms | 4.74ms | -0.6% |
+| reopen | 4.77ms | 4.72ms | +1.0% |
+| reopen_first_query | 32.6μs | 35.6μs | -8.2% |
+| file_size | 0.92MB | 0.92MB | 0% |
 
 **说明**：
 
@@ -52,9 +52,9 @@
 
 ```bash
 # Pytucky
-uv run python tests/benchmark/benchmark.py -n 100000 --extended
+uv run python tests/benchmark/benchmark.py -n 10000 --extended
 
 # 输出 JSON
-uv run python tests/benchmark/benchmark.py -n 100000 --extended \
-    --output-json tests/benchmark/benchmark_output/pytucky-v7-100000.json
+uv run python tests/benchmark/benchmark.py -n 10000 --extended \
+    --output-json tests/benchmark/benchmark_output/pytucky-v7-10000.json
 ```
