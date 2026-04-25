@@ -1,10 +1,8 @@
-# Pytucky 当前待办清单
+# Pytucky TODO
 
-本文件已按当前代码库状态重写，用于替代早期那份已经滞后的 TODO。
+基于当前代码库状态重新整理的待办清单。
 
-> 当前项目是 **PTK7 单格式库**，默认后缀为 **`.pytuck`**，显式 **`.pytucky`** 仍兼容。
-> 
-> 已完成：`pytuck -> pytucky` 包名替换、单引擎化、移除 connector/native SQL、多数核心性能优化、`None / low / medium / high` 四档与真实 `pytuck` 的双向互通。
+> 当前结论：项目整体架构方向正确，**不需要大重构**；后续工作应以**查询热路径优化、Session 批处理、CI/发布质量收口**为主。
 
 ---
 
@@ -12,99 +10,154 @@
 
 - [x] 包名已切换为 `pytucky`
 - [x] 当前仅保留 **PTK7 单引擎**
-- [x] 默认文件后缀已统一为 **`.pytuck`**
-- [x] 显式 **`.pytucky`** 后缀仍兼容
+- [x] 默认文件后缀为 **`.pytuck`**，显式 **`.pytucky`** 仍兼容
 - [x] 已支持 `None / low / medium / high` 四档读写
 - [x] 已验证与真实 `pytuck` 双向互读互写
-- [x] 当前全量测试：`164 passed`
+- [x] 已实现懒加载、索引物化缓存、增量 flush、读句柄复用
+- [x] 当前测试规模已扩充到 **191 项**
+- [x] `mypy` 已清零，并补了 pytest 内的静态回归用例（校验 `mypy pytucky`）
 
 ---
 
-## 旧 TODO 核对结果
+## P0：优先处理
 
-### 阶段一：包名替换与基础可用（已完成）
+### 1. 查询 `limit / offset / count` 真正下推到存储层
 
-- [x] 全局替换 `pytuck` → `pytucky`
-- [x] 重命名 `PytuckException` → `PytuckyException`，并保留兼容别名
-- [x] 验证 `import pytucky` 与公开 API 导出可用
-- [x] 基础冒烟 / 核心 CRUD 测试已具备
+- [x] 让 `Query._execute()` 在单列排序和普通查询路径中把 `limit` / `offset` 下推给 `Storage.query()`
+  - 相关位置：`pytucky/query/builder.py`、`pytucky/core/storage.py`
+- [x] 给 `Query.count()` 增加 count fast-path，避免“先查全量记录再 `len()`”
+  - 相关位置：`pytucky/query/builder.py`
+- [x] 优化 `Storage.query()` 的常规扫描路径，在无排序或可提前停止时避免全量物化
+  - 相关位置：`pytucky/core/storage.py`
 
-> 结论：**旧 TODO 的阶段一应视为完成，不再继续做这一阶段的旧条目。**
+**目标**：减少大结果集下的全量解码、dict copy、模型实例化开销。
 
-### 阶段二：移除多引擎架构（已完成）
+### 2. 收敛 `query_table_data()` 的双查询问题
 
-- [x] Storage 已切换为单引擎路径
-- [x] `backends/registry.py` 已移除
-- [x] `StorageBackend` 已精简为最小抽象接口
-- [x] 自动注册机制已移除
-- [x] `backends/__init__.py` 已收敛为单引擎导出
-- [x] `common/options.py` 已简化为 PTK7 所需配置
+- [x] 避免当前“先查总数、再查分页结果”的双查询路径
+  - 相关位置：`pytucky/core/storage.py`
+- [x] 为 `Storage` 增加单次分页窗口查询能力，避免 fallback 路径重复查询
+  - 相关位置：`pytucky/core/storage.py`
+- [x] 优先保证 `filters + order_by + has_more + total_count` 的统一语义，并补回归测试
+  - 相关位置：`tests/feature/test_storage_query_table_data.py`、`tests/unit/test_storage_query_table_data_backend.py`
 
-### 阶段三：移除连接器 / SQL 相关代码（已完成）
-
-- [x] Session 中 connector / native SQL 路径已清理
-- [x] Storage 中 connector 初始化与相关方法已清理
-- [x] `query/compiler.py` 已不再保留为当前实现的一部分
-
-### 阶段四：性能优化（部分完成，剩余项已转入当前待办）
-
-- [x] 按需读写主路径已实现
-- [x] 懒加载已强化
-- [x] 索引物化缓存已实现
-- [x] 增量 flush 已实现
-- [x] 读句柄复用已实现
-- [x] WAL / sidecar 方向已废弃，不再作为当前路线继续推进
-- [ ] 重新复核当前版本 `pytucky vs pytuck` benchmark，并同步文档数据
-- [ ] 视需要补性能回归基线或自动化说明
-
-### 阶段五：完善（部分完成，剩余项已转入当前待办）
-
-- [x] `__init__.py` 的 `__all__` 已更新
-- [x] 核心测试已迁移并扩充
-- [x] README / 文档 / 使用示例已存在
-- [ ] 校正文档中的过时表述（默认后缀、格式说明、测试数、加密互通说明）
-- [ ] 视需要补更明确的迁移 / 加密示例
+**目标**：降低 Web UI / 表格浏览场景下的重复过滤与重复解码成本。
 
 ---
 
-## 当前仍可继续推进的事项
+## P1：性能与运行时体验
 
-### 1. 文档校准
+### 3. 优化 `Session.flush()` 的 dirty update 路径
 
-- [ ] 更新 `README.md` 中的过时描述：
-  - `.pytucky` → 默认 `.pytuck`、显式 `.pytucky` 兼容
-  - 测试统计 `65 passed` → 当前真实测试数
-  - 补充 PTK7 与 `pytuck` 互通、三档加密现状
-- [ ] 检查 `docs/` 中是否仍有旧表述（PTK5、旧后缀、旧测试数等）并统一
+- [ ] 将 dirty 对象按模型/表分组，尽量复用已有 `bulk_update()` 能力
+  - 相关位置：`pytucky/core/session.py`、`pytucky/core/storage.py`
+- [ ] 去掉逐条 `update()` 后再 `select()` 回读的固定成本
+  - 相关位置：`pytucky/core/session.py`
+- [ ] 保持 `before_update / after_update` 事件语义不变，并补测试覆盖
+  - 相关位置：`tests/feature/test_session_advanced.py`
 
-### 2. benchmark 数据复核
+**目标**：降低批量更新时的额外读放大。
 
-- [ ] 在当前 `develop` 上重新跑一次 `pytucky vs pytuck` benchmark
-- [ ] 如果结果有变化，同步更新 `docs/guide/benchmark.md` 与 `README.md`
-- [ ] 如有必要，补一份简单的 benchmark 运行说明或回归基线说明
+### 4. 优化 prefetch / `IN` 条件的 membership 成本
 
-### 3. 对外说明收尾
+- [ ] 将 `Condition('IN', value)` 的右值标准化为 `set` / `frozenset`（保留不可 hash 值的回退）
+  - 相关位置：`pytucky/query/builder.py`
+- [ ] 优化 `_prefetch_one_to_many()` 与 `_prefetch_many_to_one()` 的值收集方式，避免把大批量主键保留为线性查找列表
+  - 相关位置：`pytucky/core/prefetch.py`
+- [ ] 增加大批量 prefetch 的回归测试或基准
+  - 相关位置：`tests/feature/test_relationship.py`
 
-- [ ] 视需要补一段明确迁移说明：`import pytuck` → `import pytucky`
-- [ ] 视需要补一段加密兼容说明：`None / low / medium / high` 与真实 `pytuck` 互通
+**目标**：降低关系批量预取场景中的 `O(rows × ids)` 级别开销。
+
+### 5. 继续压缩懒加载单行读取热路径
+
+- [ ] 评估在 `Store` / `TableState` 侧缓存 payload layout / codec 解析结果
+  - 相关位置：`pytucky/backends/store.py`、`pytucky/backends/format.py`
+- [ ] 评估内部 no-copy 快路径，减少 `select()` / `get()` 的重复 copy 成本
+  - 相关位置：`pytucky/core/storage.py`
+- [ ] 评估是否还有必要在 reopen 时复制整份 `_pk_offsets`
+  - 相关位置：`pytucky/backends/backend_pytucky.py`、`pytucky/core/storage.py`
+
+**目标**：进一步优化 reopen 后点查与懒加载首查延迟。
 
 ---
 
-## 暂不继续的旧方向
+## P1：工程质量与发布收口
 
-以下内容不再作为当前 TODO 推进：
+### 6. 固定依赖解析结果，提升 CI 可复现性
 
-- PTK5 兼容路线
-- 多引擎架构回归
-- connector / native SQL 回归
-- WAL / sidecar 方案
+- [ ] 不再忽略 `uv.lock`，提交锁文件
+  - 相关位置：`.gitignore`
+- [ ] CI 改为使用锁定依赖集，避免未来因上游版本漂移导致“代码没变但 CI 失败”
+  - 相关位置：`.github/workflows/ci.yml`
+
+### 7. 把类型检查与打包验证纳入 CI
+
+- [x] 修复当前 `mypy` 的 3 个错误
+  - 相关位置：`pytucky/core/orm.py`
+- [x] 新增 pytest 内的 `mypy` 静态回归用例，确保 `uv run python -m pytest` 可直接暴露类型回归
+  - 相关位置：`tests/feature/test_mypy_typecheck.py`
+- [ ] CI 增加 `mypy` 检查
+  - 相关位置：`.github/workflows/ci.yml`、`pyproject.toml`
+- [ ] CI 增加 `python -m build` 与 wheel 安装 smoke test
+  - 相关位置：`.github/workflows/ci.yml`
+- [ ] 验证安装态下 `py.typed`、公开 API 导出、基础导入路径可用
+  - 相关位置：`pyproject.toml`、`pytucky/__init__.py`
+
+### 8. 调整测试矩阵与测试分层
+
+- [ ] 将 compat / benchmark 从主测试矩阵中拆分或降频执行
+  - 相关位置：`.github/workflows/ci.yml`
+- [ ] 主矩阵优先保证 unit / feature 的快速反馈
+- [ ] 保留 system / benchmark，但避免拖慢所有平台和 Python 版本组合
 
 ---
 
-## 设计约束（保留）
+## P2：文档、API 契约与发布一致性
+
+### 9. 统一版本信息来源
+
+- [ ] 消除 `README.md`、`pyproject.toml`、`pytucky/__init__.py` 之间的版本漂移
+- [ ] 约束版本号为单一来源，避免发布时多处手工同步
+
+### 10. 扩充公开 API 契约测试
+
+- [ ] 为根包 `pytucky.__all__` 增加更完整的 import / smoke 测试
+  - 相关位置：`pytucky/__init__.py`、`tests/feature/test_api_contract.py`
+- [ ] 覆盖兼容别名和常用入口，降低导出回归风险
+
+### 11. 复核 benchmark 与文档描述
+
+- [ ] 重新在当前代码上跑一次 `pytucky vs pytuck` benchmark
+  - 相关位置：`tests/benchmark/benchmark.py`
+- [ ] 如结果更新，同步刷新 `README.md` 与 `docs/guide/benchmark.md`
+- [ ] 去掉 benchmark 中对源码路径的硬编码依赖，优先验证安装态行为
+
+### 12. 校正文档中的过时信息
+
+- [ ] 校正 README 中过时版本号与测试规模描述
+- [ ] 检查 `docs/` 下是否还保留旧后缀、旧测试数、旧阶段性表述
+- [ ] 按需要补一段简明迁移说明：`import pytuck` → `import pytucky`
+- [ ] 按需要补一段加密兼容说明：`None / low / medium / high` 与 `pytuck` 的互通范围
+
+---
+
+## 已完成且不再回退的方向
+
+以下方向已经完成，或明确不再作为当前路线继续推进：
+
+- [x] `pytuck` → `pytucky` 包名替换
+- [x] 多引擎架构移除
+- [x] connector / native SQL 路径移除
+- [x] PTK5 / 旧格式兼容路线移除
+- [x] WAL / sidecar 方向废弃
+
+---
+
+## 设计约束（持续保留）
 
 - **格式兼容**：`pytucky` 生成的 PTK7 文件必须能被 `pytuck` 读取，反之亦然
 - **API 兼容**：基础 ORM 用法仅需更改 import 即可从 `pytuck` 切换
-- **零外部依赖**：核心库不依赖任何第三方运行时包
-- **Python 3.10+**：不再兼容已停止维护的旧版本
+- **零运行时依赖**：核心库不依赖第三方运行时包
+- **Python 3.10+**：维持当前支持范围
 - **性能优先**：在共享 PTK7 格式前提下，优先保证读写性能
