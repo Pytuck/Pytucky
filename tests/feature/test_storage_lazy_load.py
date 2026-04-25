@@ -37,6 +37,24 @@ def test_lazy_table_select_does_not_require_full_materialization(tmp_path: Path)
 
 
 @pytest.mark.feature
+def test_lazy_table_select_returns_isolated_record_copy(tmp_path: Path) -> None:
+    db_path = tmp_path / "lazy-select-copy.pytucky"
+    storage = build_user_storage(db_path)
+    storage.insert("users", {"id": 1, "name": "Alice", "age": 20})
+    storage.flush()
+    storage.close()
+
+    reopened = Storage(file_path=str(db_path))
+    try:
+        record = reopened.select("users", 1)
+        record["name"] = "Mutated"
+
+        assert reopened.select("users", 1)["name"] == "Alice"
+    finally:
+        reopened.close()
+
+
+@pytest.mark.feature
 def test_changed_lazy_table_flush_only_materializes_modified_table(tmp_path: Path) -> None:
     db_path = tmp_path / "lazy-flush.pytucky"
     storage = build_user_storage(db_path)
@@ -113,6 +131,31 @@ def test_read_lazy_record_rebuilds_missing_offset_mapping(tmp_path: Path) -> Non
 
         assert record["name"] == "Alice"
         assert backend._offset_map[offset] == ("users", 1)
+    finally:
+        reopened.close()
+
+
+@pytest.mark.feature
+def test_reopened_lazy_table_shares_backend_pk_offset_view(tmp_path: Path) -> None:
+    db_path = tmp_path / "lazy-offset-view.pytucky"
+    storage = build_user_storage(db_path)
+    storage.insert("users", {"id": 1, "name": "Alice", "age": 20})
+    storage.flush()
+    storage.close()
+
+    reopened = Storage(file_path=str(db_path))
+    try:
+        table = reopened.get_table("users")
+        backend = reopened.backend
+        assert backend is not None
+
+        state = backend.store.table_state("users")
+        assert table._pk_offsets is not None
+        assert table._pk_offsets[1] == state.pk_index[1][0]
+
+        reopened.delete("users", 1)
+
+        assert 1 not in state.pk_index
     finally:
         reopened.close()
 

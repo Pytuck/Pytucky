@@ -10,7 +10,7 @@ import copy
 from functools import wraps
 from pathlib import Path
 from threading import RLock
-from typing import Any, Callable, Concatenate, Generator, Iterator, ParamSpec, TYPE_CHECKING, Sequence, TypeVar
+from typing import Any, Callable, Concatenate, Generator, Iterator, MutableMapping, ParamSpec, TYPE_CHECKING, Sequence, TypeVar
 from contextlib import contextmanager
 
 from ..common.options import PytuckBackendOptions, SyncOptions, SyncResult
@@ -45,6 +45,31 @@ def _storage_locked(
             return method(self, *args, **kwargs)
 
     return wrapper
+
+
+class _PkOffsetView(MutableMapping[Any, int]):
+    def __init__(self, pk_index: dict[Any, tuple[int, int]]) -> None:
+        self._pk_index = pk_index
+
+    def __getitem__(self, key: Any) -> int:
+        return self._pk_index[key][0]
+
+    def __setitem__(self, key: Any, value: int) -> None:
+        if key in self._pk_index:
+            _, length = self._pk_index[key]
+            self._pk_index[key] = (value, length)
+        else:
+            self._pk_index[key] = (value, 0)
+
+    def __delitem__(self, key: Any) -> None:
+        del self._pk_index[key]
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self._pk_index)
+
+    def __len__(self) -> int:
+        return len(self._pk_index)
+
 
 class TransactionSnapshot:
     """
@@ -148,7 +173,7 @@ class Table:
         self._schema_dirty: bool = False  # 结构是否被修改（add_column/drop_column 等）
 
         # 懒加载支持
-        self._pk_offsets: dict[Any, int] | None = None  # {pk: file_offset}
+        self._pk_offsets: MutableMapping[Any, int] | None = None  # {pk: file_offset}
         self._data_file: Path | None = None  # 数据文件路径
         self._backend: StorageBackend | None = None  # PTK7 后端引用（用于读取记录）
         self._lazy_loaded: bool = False  # 是否为懒加载模式
@@ -588,7 +613,12 @@ class Table:
         offset: int = self._pk_offsets[pk]  # type: ignore
 
         record = self._backend.read_lazy_record(
-            self._data_file, offset, self.columns, pk, table_name=self.name
+            self._data_file,
+            offset,
+            self.columns,
+            pk,
+            table_name=self.name,
+            copy_result=False,
         )
         return record
 

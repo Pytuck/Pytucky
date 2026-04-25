@@ -6,7 +6,7 @@ from threading import RLock
 from typing import Any, Callable, Concatenate, ParamSpec, TypeVar
 
 from ..backends.store import Store, TableState, TableOverlay
-from ..core.storage import Table
+from ..core.storage import Table, _PkOffsetView
 from ..core.orm import Column
 from ..core.index import BaseIndex
 from ..common.options import PytuckBackendOptions
@@ -115,7 +115,7 @@ class PytuckyBackend(StorageBackend):
             table._data_file = self.file_path
             table._lazy_loaded = True
             # pk_index in Store maps pk -> (offset,length)
-            table._pk_offsets = {pk: off for pk, (off, length) in state.pk_index.items()}
+            table._pk_offsets = _PkOffsetView(state.pk_index)
 
             # restore indexes lazily: create proxy index objects that defer decoding to lookup/range operations
             # proxies keep local overlay for in-memory insert/remove and call Store helpers on demand
@@ -358,11 +358,21 @@ class PytuckyBackend(StorageBackend):
                 table._ensure_all_loaded()
 
     @_backend_locked
-    def read_lazy_record(self, file_path: Path, offset: int, columns: dict[str, Column], pk: Any, *, table_name: str | None = None) -> dict[str, Any]:
+    def read_lazy_record(
+        self,
+        file_path: Path,
+        offset: int,
+        columns: dict[str, Column],
+        pk: Any,
+        *,
+        table_name: str | None = None,
+        copy_result: bool = True,
+    ) -> dict[str, Any]:
         try:
+            select_record = self.store.select if copy_result else self.store.select_raw
             # 快速路径：调用方已知 table_name，直接 select，跳过 offset_map
             if table_name is not None:
-                return self.store.select(table_name, pk)
+                return select_record(table_name, pk)
             # 慢路径：延迟构建 offset_map 后查找
             if self._offset_map is None:
                 self._rebuild_offset_map()
@@ -380,7 +390,7 @@ class PytuckyBackend(StorageBackend):
             if entry is None:
                 raise KeyError(f'Offset {offset} not known')
             resolved_table, resolved_pk = entry
-            return self.store.select(resolved_table, resolved_pk)
+            return select_record(resolved_table, resolved_pk)
         except Exception as exc:
             raise SerializationError(f'V7 read lazy record failed: {exc}') from exc
 
