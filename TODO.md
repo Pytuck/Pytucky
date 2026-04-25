@@ -14,7 +14,7 @@
 - [x] 已支持 `None / low / medium / high` 四档读写
 - [x] 已验证与真实 `pytuck` 双向互读互写
 - [x] 已实现懒加载、索引物化缓存、增量 flush、读句柄复用
-- [x] 当前测试规模已扩充到 **198 项**
+- [x] 当前测试规模已扩充到 **200 项**
 - [x] `mypy` 已清零，并补了 pytest 内的静态回归用例（校验 `mypy pytucky`）
 
 ---
@@ -117,14 +117,14 @@
 
 ### 9. 统一版本信息来源
 
-- [ ] 消除 `README.md`、`pyproject.toml`、`pytucky/__init__.py` 之间的版本漂移
-- [ ] 约束版本号为单一来源，避免发布时多处手工同步
+- [x] 消除 `README.md`、`pyproject.toml`、`pytucky/__init__.py` 之间的版本漂移
+- [x] 约束版本号为单一来源，避免发布时多处手工同步
 
 ### 10. 扩充公开 API 契约测试
 
-- [ ] 为根包 `pytucky.__all__` 增加更完整的 import / smoke 测试
+- [x] 为根包 `pytucky.__all__` 增加更完整的 import / smoke 测试
   - 相关位置：`pytucky/__init__.py`、`tests/feature/test_api_contract.py`
-- [ ] 覆盖兼容别名和常用入口，降低导出回归风险
+- [x] 覆盖兼容别名和常用入口，降低导出回归风险
 
 ### 11. 复核 benchmark 与文档描述
 
@@ -135,7 +135,7 @@
 
 ### 12. 校正文档中的过时信息
 
-- [ ] 校正 README 中过时版本号与测试规模描述
+- [x] 校正 README 中过时版本号与测试规模描述
 - [ ] 检查 `docs/` 下是否还保留旧后缀、旧测试数、旧阶段性表述
 - [ ] 按需要补一段简明迁移说明：`import pytuck` → `import pytucky`
 - [ ] 按需要补一段加密兼容说明：`None / low / medium / high` 与 `pytuck` 的互通范围

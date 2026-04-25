@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
+import tomllib
 
 import pytest
 
@@ -165,3 +167,60 @@ def test_storage_close_delegates_to_backend_close(
     db.close()
 
     assert calls["count"] == 1
+
+
+@pytest.mark.feature
+def test_version_metadata_uses_package_attr_source() -> None:
+    import pytucky
+
+    repo_root = Path(__file__).resolve().parents[2]
+    pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+
+    project = pyproject["project"]
+    assert "version" not in project
+    assert project["dynamic"] == ["version"]
+    assert pyproject["tool"]["setuptools"]["dynamic"]["version"]["attr"] == "pytucky.__version__"
+
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    docs_index = (repo_root / "docs/api/index.md").read_text(encoding="utf-8")
+
+    assert not re.search(r"^\| 版本 \| \*\*\d+\.\d+\.\d+\*\* \|$", readme, re.MULTILINE)
+    assert not re.search(r"^当前版本：\*\*\d+\.\d+\.\d+\*\*$", docs_index, re.MULTILINE)
+    assert isinstance(pytucky.__version__, str)
+    assert pytucky.__version__
+
+
+@pytest.mark.feature
+def test_root_package_exports_match_all_contract() -> None:
+    import pytucky
+
+    expected_common_exports = {
+        "Storage",
+        "Session",
+        "Column",
+        "Relationship",
+        "declarative_base",
+        "select",
+        "insert",
+        "update",
+        "delete",
+        "or_",
+        "and_",
+        "not_",
+        "Result",
+        "CursorResult",
+        "SyncOptions",
+        "SyncResult",
+    }
+
+    assert expected_common_exports.issubset(set(pytucky.__all__))
+    assert [name for name in pytucky.__all__ if not hasattr(pytucky, name)] == []
+
+    assert pytucky.Storage is Storage
+    assert pytucky.Session is Session
+    assert pytucky.Column is Column
+    assert pytucky.select is select
+    assert pytucky.insert is insert
+    assert pytucky.declarative_base is declarative_base
+    assert pytucky.PytuckException is pytucky.PytuckyException
+    assert pytucky.PytuckIndexError is pytucky.PytuckyIndexError

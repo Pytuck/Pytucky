@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pytucky"
-version = "1.1.2"
+dynamic = ["version"]
 description = "Lightweight single-engine Python document database - pytuck format only, no SQL, high-performance embedded storage"
 readme = "README.md"
 license = "MIT"
@@ -57,6 +57,9 @@ dev = [
 [tool.setuptools]
 packages = ["pytucky", "pytucky.core", "pytucky.common", "pytucky.query", "pytucky.backends"]
 include-package-data = true
+
+[tool.setuptools.dynamic]
+version = {attr = "pytucky.__version__"}
 
 [tool.setuptools.package-data]
 pytucky = ["py.typed"]
