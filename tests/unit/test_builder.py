@@ -143,13 +143,25 @@ def test_query_filter_accepts_binary_and_logical():
         def __init__(self, records):
             self._records = records
 
-        def query(self, table_name, conditions, order_by=None, order_desc=False):
+        def query(self, table_name, conditions, limit=None, offset=0, order_by=None, order_desc=False):
             # evaluate conditions against records and return matching ones
             out = []
             for r in self._records:
                 if all(cond.evaluate(r) for cond in conditions):
                     out.append(r)
+            if offset != 0:
+                out = out[offset:]
+            if limit is not None:
+                out = out[:limit]
             return out
+
+        def _query_count(self, table_name, conditions, limit=None, offset=0):
+            matches = [r for r in self._records if all(cond.evaluate(r) for cond in conditions)]
+            if offset > 0:
+                matches = matches[offset:]
+            if limit is not None:
+                matches = matches[:limit]
+            return len(matches)
 
     storage = MockStorage([{"age": 21, "name": "Alice"}, {"age": 17, "name": "Bob"}])
 
@@ -162,3 +174,89 @@ def test_query_filter_accepts_binary_and_logical():
     res = q.all()
     assert len(res) == 1
     assert res[0].age == 21
+
+
+def test_query_pushes_limit_offset_and_order_to_storage():
+    class MockStorage:
+        def __init__(self):
+            self.calls = []
+
+        def query(self, table_name, conditions, limit=None, offset=0, order_by=None, order_desc=False):
+            self.calls.append(
+                {
+                    "table_name": table_name,
+                    "conditions": conditions,
+                    "limit": limit,
+                    "offset": offset,
+                    "order_by": order_by,
+                    "order_desc": order_desc,
+                }
+            )
+            return [{"age": 30, "name": "Alice"}]
+
+        def _query_count(self, table_name, conditions, limit=None, offset=0):
+            raise AssertionError("count fast-path should not be used here")
+
+    storage = MockStorage()
+
+    class M(DummyModel):
+        __storage__ = storage
+
+    q = builder.Query(M, storage=storage)
+    q.order_by("age", desc=True).limit(2).offset(1)
+    res = q.all()
+
+    assert len(res) == 1
+    assert storage.calls == [
+        {
+            "table_name": "dummy",
+            "conditions": [],
+            "limit": 2,
+            "offset": 1,
+            "order_by": "age",
+            "order_desc": True,
+        }
+    ]
+
+
+
+def test_query_count_uses_storage_fast_path():
+    class MockStorage:
+        def __init__(self):
+            self.query_calls = 0
+            self.count_calls = []
+
+        def query(self, table_name, conditions, limit=None, offset=0, order_by=None, order_desc=False):
+            self.query_calls += 1
+            return [{"age": 30, "name": "Alice"}]
+
+        def _query_count(self, table_name, conditions, limit=None, offset=0):
+            self.count_calls.append(
+                {
+                    "table_name": table_name,
+                    "conditions": conditions,
+                    "limit": limit,
+                    "offset": offset,
+                }
+            )
+            return 2
+
+    storage = MockStorage()
+
+    class M(DummyModel):
+        __storage__ = storage
+
+    q = builder.Query(M, storage=storage)
+    col = M.__columns__["age"]
+    q.filter(builder.BinaryExpression(col, ">=", 18)).limit(2).offset(1)
+
+    assert q.count() == 2
+    assert storage.query_calls == 0
+    assert storage.count_calls == [
+        {
+            "table_name": "dummy",
+            "conditions": q._conditions,
+            "limit": 2,
+            "offset": 1,
+        }
+    ]

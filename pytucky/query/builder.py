@@ -474,8 +474,34 @@ class Query(Generic[T]):
         Returns:
             记录数
         """
-        records = self._execute()
-        return len(records)
+        # 负数分页参数沿用旧行为：退回到执行查询后计数
+        if self._offset_value < 0 or (self._limit_value is not None and self._limit_value < 0):
+            records = self._execute()
+            return len(records)
+
+        # 获取 storage 实例（新 API 优先，兼容旧 API）
+        storage: 'Storage | None' = (
+            self.storage or
+            getattr(self.model_class, '__storage__', None) or
+            getattr(self.model_class, '_db', None)
+        )
+
+        if not storage:
+            raise QueryError(f"No database configured for {self.model_class.__name__}")
+
+        table_name: str | None = (
+            getattr(self.model_class, '__tablename__', None) or
+            getattr(self.model_class, '_table_name', None)
+        )
+        if not table_name:
+            raise QueryError(f"No table name defined for {self.model_class.__name__}")
+
+        return storage._query_count(
+            table_name,
+            self._conditions,
+            limit=self._limit_value,
+            offset=self._offset_value,
+        )
 
     def _execute(self) -> list[dict]:
         """
@@ -503,13 +529,31 @@ class Query(Generic[T]):
         if not table_name:
             raise QueryError(f"No table name defined for {self.model_class.__name__}")
 
-        # 从存储引擎查询
+        can_push_pagination = (
+            self._offset_value >= 0
+            and (self._limit_value is None or self._limit_value >= 0)
+        )
+        needs_local_slice = len(self._order_by_fields) > 1 or not can_push_pagination
+
         if len(self._order_by_fields) == 1:
-            # 单列排序：下推给 Storage.query（可利用 SortedIndex 优化）
             field, desc = self._order_by_fields[0]
-            records: list[dict] = storage.query(
-                table_name, self._conditions,
-                order_by=field, order_desc=desc
+            if can_push_pagination:
+                records: list[dict] = storage.query(
+                    table_name,
+                    self._conditions,
+                    limit=self._limit_value,
+                    offset=self._offset_value,
+                    order_by=field,
+                    order_desc=desc,
+                )
+            else:
+                records = storage.query(table_name, self._conditions, order_by=field, order_desc=desc)
+        elif len(self._order_by_fields) == 0 and can_push_pagination:
+            records = storage.query(
+                table_name,
+                self._conditions,
+                limit=self._limit_value,
+                offset=self._offset_value,
             )
         else:
             records = storage.query(table_name, self._conditions)
@@ -527,12 +571,11 @@ class Query(Generic[T]):
                     return sort_key
                 records.sort(key=make_sort_key(field), reverse=desc)
 
-        # 偏移和限制
-        if self._offset_value > 0:
-            records = records[self._offset_value:]
-
-        if self._limit_value is not None:
-            records = records[:self._limit_value]
+        if needs_local_slice:
+            if self._offset_value != 0:
+                records = records[self._offset_value:]
+            if self._limit_value is not None:
+                records = records[:self._limit_value]
 
         return records
 

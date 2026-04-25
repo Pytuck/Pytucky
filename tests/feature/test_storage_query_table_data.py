@@ -87,3 +87,46 @@ def test_query_table_data_accepts_operator_filter_list(tmp_path: Path) -> None:
         assert [row["age"] for row in payload["records"]] == [42, 27]
     finally:
         db.close()
+
+
+@pytest.mark.feature
+def test_query_table_data_fallback_does_not_call_query_twice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db = Storage(file_path=tmp_path / "query-table-data-single-pass.pytucky")
+    Base = declarative_base(db)
+
+    class User(Base):
+        __tablename__ = "users_qtd_single"
+        id = Column(int, primary_key=True)
+        name = Column(str, index=True)
+        age = Column(int, index="sorted")
+
+    try:
+        for idx, (name, age) in enumerate(
+            [
+                ("alice", 20),
+                ("alice", 30),
+                ("alice", 40),
+                ("bob", 50),
+            ],
+            start=1,
+        ):
+            db.insert("users_qtd_single", {"id": idx, "name": name, "age": age})
+
+        def fail_query(*args, **kwargs):
+            raise AssertionError("query_table_data fallback should not call Storage.query()")
+
+        monkeypatch.setattr(db, "query", fail_query)
+
+        payload = db.query_table_data(
+            "users_qtd_single",
+            limit=2,
+            offset=1,
+            order_by="age",
+            filters={"name": "alice"},
+        )
+
+        assert payload["total_count"] == 3
+        assert payload["has_more"] is False
+        assert [row["age"] for row in payload["records"]] == [30, 40]
+    finally:
+        db.close()

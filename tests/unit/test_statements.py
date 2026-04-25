@@ -81,7 +81,42 @@ def test_select_limit_offset(tmp_path):
 
     res = session.execute(select(User).order_by('age').limit(2).offset(1))
     users = res.all()
-    assert len(users) == 2
+    assert [user.age for user in users] == [30, 35]
+
+
+def test_select_pushes_limit_offset_to_storage_query(tmp_path):
+    storage = make_storage(tmp_path)
+    User = make_user_model(storage)
+    session = Session(storage)
+
+    captured = {}
+
+    def fake_query(table_name, conditions, limit=None, offset=0, order_by=None, order_desc=False):
+        captured.update(
+            {
+                'table_name': table_name,
+                'conditions': conditions,
+                'limit': limit,
+                'offset': offset,
+                'order_by': order_by,
+                'order_desc': order_desc,
+            }
+        )
+        return [{'id': 1, 'name': 'Alice', 'age': 30}]
+
+    storage.query = fake_query  # type: ignore[method-assign]
+
+    users = session.execute(select(User).order_by('age', desc=True).limit(2).offset(1)).all()
+
+    assert len(users) == 1
+    assert captured == {
+        'table_name': 'users',
+        'conditions': [],
+        'limit': 2,
+        'offset': 1,
+        'order_by': 'age',
+        'order_desc': True,
+    }
 
 def test_select_returning_empty(tmp_path):
     storage = make_storage(tmp_path)

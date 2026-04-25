@@ -202,9 +202,15 @@ class Select(Statement[T]):
                     details={'expression': repr(expr)}
                 )
 
-        # 查询
         table_name = self.model_class.__tablename__
         assert table_name is not None, f"Model {self.model_class.__name__} must have __tablename__ defined"
+
+        can_push_pagination = (
+            self._offset_value >= 0
+            and (self._limit_value is None or self._limit_value >= 0)
+        )
+        used_pk_fast_path = False
+        records: list[dict[str, Any]] = []
 
         # 快速路径：如果是单一主键等值查询，直接下推到 storage.select
         pk_name = self.model_class.__primary_key__
@@ -212,23 +218,37 @@ class Select(Statement[T]):
         if pk_name and len(self._where_clauses) == 1:
             from .builder import BinaryExpression
             expr = self._where_clauses[0]
-            if isinstance(expr, BinaryExpression):
-                if expr.column._attr_name == pk_name and expr.operator in ('=', '=='):
-                    try:
-                        rec = storage.select(table_name, expr.value)
-                        return [rec]
-                    except RecordNotFoundError:
-                        return []
+            if isinstance(expr, BinaryExpression) and expr.column._attr_name == pk_name and expr.operator in ('=', '=='):
+                used_pk_fast_path = True
+                try:
+                    rec = storage.select(table_name, expr.value)
+                    records = [rec]
+                except RecordNotFoundError:
+                    records = []
 
-        if len(self._order_by_fields) == 1:
-            # 单列排序：下推给 Storage.query（可利用 SortedIndex 优化）
-            field, desc = self._order_by_fields[0]
-            records = storage.query(
-                table_name, conditions,
-                order_by=field, order_desc=desc
-            )
-        else:
-            records = storage.query(table_name, conditions)
+        if not used_pk_fast_path:
+            if len(self._order_by_fields) == 1:
+                field, desc = self._order_by_fields[0]
+                if can_push_pagination:
+                    records = storage.query(
+                        table_name,
+                        conditions,
+                        limit=self._limit_value,
+                        offset=self._offset_value,
+                        order_by=field,
+                        order_desc=desc,
+                    )
+                else:
+                    records = storage.query(table_name, conditions, order_by=field, order_desc=desc)
+            elif len(self._order_by_fields) == 0 and can_push_pagination:
+                records = storage.query(
+                    table_name,
+                    conditions,
+                    limit=self._limit_value,
+                    offset=self._offset_value,
+                )
+            else:
+                records = storage.query(table_name, conditions)
 
         # 多列排序（从后往前排序，确保优先级正确）
         if len(self._order_by_fields) > 1:
@@ -243,11 +263,11 @@ class Select(Statement[T]):
                     return sort_key
                 records.sort(key=make_sort_key(field), reverse=desc)
 
-        # 偏移和限制
-        if self._offset_value > 0:
-            records = records[self._offset_value:]
-        if self._limit_value is not None:
-            records = records[:self._limit_value]
+        if used_pk_fast_path or len(self._order_by_fields) > 1 or not can_push_pagination:
+            if self._offset_value != 0:
+                records = records[self._offset_value:]
+            if self._limit_value is not None:
+                records = records[:self._limit_value]
 
         return records
 
