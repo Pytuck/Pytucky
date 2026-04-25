@@ -48,7 +48,13 @@ class Condition:
             raise QueryError(f"Unsupported operator: {operator}")
         self.field = field
         self.operator = operator
-        self.value = value
+        normalized_value: Any = value
+        if operator == 'IN' and isinstance(value, (list, tuple, set, frozenset)):
+            try:
+                normalized_value = frozenset(value)
+            except TypeError:
+                pass
+        self.value = normalized_value
 
     def evaluate(self, record: dict) -> bool:
         """

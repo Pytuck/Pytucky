@@ -1,3 +1,4 @@
+import importlib
 from pathlib import Path
 from typing import Type
 
@@ -234,6 +235,58 @@ def test_prefetch_option_and_immediate_mode(tmp_path: Path) -> None:
         assert isinstance(a1._cached_books, list)
         assert len(a1._cached_books) == 2
         assert a2._cached_books == []
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+@pytest.mark.feature
+def test_prefetch_passes_hash_container_to_in_conditions(tmp_path: Path, monkeypatch) -> None:
+    db = Storage(file_path=tmp_path / "rel-prefetch-in-container.pytucky")
+    Base: Type = declarative_base(db, crud=True)
+
+    class Author(Base):
+        __tablename__ = 'authors'
+        id = Column(int, primary_key=True)
+        name = Column(str)
+        books = Relationship('books', foreign_key='author_id')
+
+    class Book(Base):
+        __tablename__ = 'books'
+        id = Column(int, primary_key=True)
+        title = Column(str)
+        author_id = Column(int)
+        author = Relationship('authors', foreign_key='author_id')
+
+    captured_values = []
+    prefetch_module = importlib.import_module("pytucky.core.prefetch")
+    original_condition = prefetch_module.Condition
+
+    def capture_condition(field, operator, value):
+        if operator == 'IN':
+            captured_values.append(value)
+        return original_condition(field, operator, value)
+
+    monkeypatch.setattr(prefetch_module, 'Condition', capture_condition)
+
+    try:
+        author = Author.create(name='Hashy')
+        book = Book.create(title='B1', author_id=author.id)
+
+        loaded_author = Author.get(author.id)
+        loaded_book = Book.get(book.id)
+        assert loaded_author is not None
+        assert loaded_book is not None
+
+        prefetch([loaded_author], 'books')
+        prefetch([loaded_book], 'author')
+
+        assert len(captured_values) == 2
+        assert all(isinstance(value, frozenset) for value in captured_values)
+        assert len(loaded_author._cached_books) == 1
+        assert loaded_book._cached_author is not None
     finally:
         try:
             db.close()

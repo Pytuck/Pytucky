@@ -172,11 +172,11 @@ def _prefetch_one_to_many(
         cache_key: 缓存属性名
     """
     # 1. 收集 owner 主键值
-    pk_values: list[Any] = []
+    pk_values: set[Any] = set()
     for inst in instances:
         pk_val = getattr(inst, pk_attr, None)
         if pk_val is not None:
-            pk_values.append(pk_val)
+            pk_values.add(pk_val)
 
     if not pk_values:
         for inst in instances:
@@ -184,7 +184,7 @@ def _prefetch_one_to_many(
         return
 
     # 2. 单次批量查询
-    condition = Condition(foreign_key, 'IN', pk_values)
+    condition = Condition(foreign_key, 'IN', frozenset(pk_values))
     records = storage.query(target_table, [condition])
 
     # 3. 将 records 转为 target_model 实例并按外键分组
@@ -229,7 +229,7 @@ def _prefetch_many_to_one(
         if fk_val is not None:
             fk_set.add(fk_val)
 
-    fk_values: list[Any] = list(fk_set)
+    fk_values = frozenset(fk_set)
 
     if not fk_values:
         for inst in instances:

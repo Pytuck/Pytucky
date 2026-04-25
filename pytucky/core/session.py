@@ -199,42 +199,56 @@ class Session:
                     self._register_instance(instance)
                     event.dispatch_model(model_class, 'after_insert', instance)
 
-        # 2. 处理待更新对象
-        for instance in self._dirty_objects:
-            table_name = instance.__tablename__
-            assert table_name is not None, f"Model {instance.__class__.__name__} must have __tablename__ defined"
+        # 2. 处理待更新对象（按模型类分组，批量写入并逐个触发事件）
+        if self._dirty_objects:
+            dirty_groups: OrderedDict[type[PureBaseModel], list[PureBaseModel]] = OrderedDict()
+            for instance in self._dirty_objects:
+                cls = instance.__class__
+                if cls not in dirty_groups:
+                    dirty_groups[cls] = []
+                dirty_groups[cls].append(instance)
 
-            pk_name = instance.__primary_key__
-            if pk_name:
-                pk = getattr(instance, pk_name)
-            else:
-                pk = getattr(instance, '_pytuck_rowid', None)
+            for model_class, instances in dirty_groups.items():
+                table_name = model_class.__tablename__
+                assert table_name is not None, f"Model {model_class.__name__} must have __tablename__ defined"
 
-            # 触发 before_update 事件（可在回调中修改实例字段）
-            event.dispatch_model(instance.__class__, 'before_update', instance)
+                pk_name = model_class.__primary_key__
+                dirty_pks: list[Any] = []
+                for instance in instances:
+                    if pk_name:
+                        dirty_pks.append(getattr(instance, pk_name))
+                    else:
+                        dirty_pks.append(getattr(instance, '_pytuck_rowid', None))
 
-            # 构建要更新的数据（使用 Column.name 作为存储键）
-            data = {}
-            for attr_name, column in instance.__columns__.items():
-                value = getattr(instance, attr_name, None)
-                if value is not None:
-                    # 使用 Column.name 作为存储键
-                    db_col_name = column.name if column.name else attr_name
-                    data[db_col_name] = value
+                # 逐个触发 before_update 事件（保持语义一致，回调可修改实例字段）
+                for instance in instances:
+                    event.dispatch_model(model_class, 'before_update', instance)
 
-            # 更新数据库
-            self.storage.update(table_name, pk, data)
+                # 批量构建更新数据
+                updates: list[tuple[Any, dict[str, Any]]] = []
+                for pk, instance in zip(dirty_pks, instances):
+                    update_data: dict[str, Any] = {}
+                    for attr_name, column in model_class.__columns__.items():
+                        value = getattr(instance, attr_name, None)
+                        if value is not None:
+                            db_col_name = column.name if column.name else attr_name
+                            update_data[db_col_name] = value
+                    updates.append((pk, update_data))
 
-            # 从数据库重新读取并更新实例
-            db_record = self.storage.select(table_name, pk)
-            for db_col_name, value in db_record.items():
-                if db_col_name != PSEUDO_PK_NAME:
-                    # 将 Column.name 转换回属性名
-                    attr_name = instance._column_to_attr_name(db_col_name) or db_col_name
-                    object.__setattr__(instance, attr_name, value)
+                # 批量更新数据库
+                self.storage.bulk_update(table_name, updates)
 
-            # 触发 after_update 事件（实例已刷新）
-            event.dispatch_model(instance.__class__, 'after_update', instance)
+                # 从 table.data 直接读取已验证记录（替代逐条 storage.select readback）
+                table = self.storage.get_table(table_name)
+                for pk, instance in zip(dirty_pks, instances):
+                    db_record = table.data[pk]
+                    for db_col_name, value in db_record.items():
+                        if db_col_name != PSEUDO_PK_NAME:
+                            attr_name = instance._column_to_attr_name(db_col_name) or db_col_name
+                            object.__setattr__(instance, attr_name, value)
+
+                    # 触发 after_update 事件（实例已刷新）
+                    event.dispatch_model(model_class, 'after_update', instance)
 
         # 3. 处理待删除对象
         for instance in self._deleted_objects:

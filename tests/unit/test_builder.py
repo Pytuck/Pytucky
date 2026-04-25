@@ -48,7 +48,9 @@ def test_condition_evaluate_all_ops():
     assert not builder.Condition("age", "!=", 30).evaluate(rec)
 
     # IN membership (field value is a member of the provided collection)
-    assert builder.Condition("age", "IN", [25, 30, 35]).evaluate(rec)
+    in_condition = builder.Condition("age", "IN", [25, 30, 35])
+    assert isinstance(in_condition.value, frozenset)
+    assert in_condition.evaluate(rec)
     assert not builder.Condition("age", "IN", [25, 35]).evaluate(rec)
 
     # LIKE contains (case insensitive)
@@ -60,6 +62,14 @@ def test_condition_evaluate_all_ops():
     assert builder.Condition("name", "STARTSWITH", "hello").evaluate(rec)
     assert builder.Condition("name", "ENDSWITH", "world").evaluate(rec)
     assert not builder.Condition("name", "STARTSWITH", "world").evaluate(rec)
+
+
+def test_condition_in_falls_back_for_unhashable_values():
+    rec = {"tags": [1, 2]}
+    condition = builder.Condition("tags", "IN", [[1, 2], [3, 4]])
+
+    assert isinstance(condition.value, list)
+    assert condition.evaluate(rec)
 
 
 def test_condition_unsupported_operator_raises():
