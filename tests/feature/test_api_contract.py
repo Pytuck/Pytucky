@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-import tomllib
 
 import pytest
 
@@ -174,12 +173,15 @@ def test_version_metadata_uses_package_attr_source() -> None:
     import pytucky
 
     repo_root = Path(__file__).resolve().parents[2]
-    pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+    pyproject_text = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
 
-    project = pyproject["project"]
-    assert "version" not in project
-    assert project["dynamic"] == ["version"]
-    assert pyproject["tool"]["setuptools"]["dynamic"]["version"]["attr"] == "pytucky.__version__"
+    project_match = re.search(r"(?ms)^\[project\]\n(?P<body>.*?)(?:^\[|\Z)", pyproject_text)
+    assert project_match is not None
+    project_block = project_match.group("body")
+
+    assert not re.search(r'^version\s*=\s*["\']', project_block, re.MULTILINE)
+    assert 'dynamic = ["version"]' in project_block
+    assert 'version = {attr = "pytucky.__version__"}' in pyproject_text
 
     readme = (repo_root / "README.md").read_text(encoding="utf-8")
     docs_index = (repo_root / "docs/api/index.md").read_text(encoding="utf-8")
