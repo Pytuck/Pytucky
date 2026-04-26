@@ -636,10 +636,14 @@ class PureBaseModel:
         Returns:
             对应的属性名，如果未找到返回 None
         """
-        for attr_name, column in cls.__columns__.items():
-            if column.name == col_name:
-                return attr_name
-        return None
+        mapping = getattr(cls, '_column_name_to_attr_cache', None)
+        if mapping is None or len(mapping) != len(cls.__columns__):
+            mapping = {
+                (column.name or attr_name): attr_name
+                for attr_name, column in cls.__columns__.items()
+            }
+            setattr(cls, '_column_name_to_attr_cache', mapping)
+        return mapping.get(col_name)
 
     def to_dict(
         self,
@@ -1091,7 +1095,7 @@ class Relationship(Generic[RelationshipT]):
     ) -> 'Storage':
         """解析目标 storage，并处理显式 storage 与模型绑定冲突。"""
         relationship_name = self.name or '<unnamed>'
-        model_storage = getattr(target_model, '__storage__', None)
+        model_storage = target_model.__storage__
 
         if self.storage is not None:
             if model_storage is not None and model_storage is not self.storage:
@@ -1105,7 +1109,7 @@ class Relationship(Generic[RelationshipT]):
         if model_storage is not None:
             return model_storage
 
-        owner_storage = getattr(owner, '__storage__', None)
+        owner_storage = owner.__storage__
         if owner_storage is not None:
             return owner_storage
 
@@ -1116,7 +1120,7 @@ class Relationship(Generic[RelationshipT]):
 
     def _resolve_target_table(self, target_model: type[PureBaseModel]) -> str:
         """解析目标表名。"""
-        target_table = getattr(target_model, '__tablename__', None)
+        target_table = target_model.__tablename__
         if not target_table:
             raise ValidationError(
                 f"Relationship target model '{target_model.__name__}' must define __tablename__"

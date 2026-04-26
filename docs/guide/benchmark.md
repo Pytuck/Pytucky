@@ -1,16 +1,18 @@
 # 性能基准报告
 
-> 测试环境：Linux 6.18.7-76061807-generic / Python 3.12.3
+> 测试环境：Darwin 25.4.0 / Python 3.13.11
 >
-> 数据规模：100,000 条记录（6 列：id, name, email, age, score, active）
+> 数据规模：10,000 条记录（6 列：id, name, email, age, score, active）
 >
-> 日期：2026-04-14
+> 轮次：3 轮均值
+>
+> 日期：2026-04-26
 
 ## 测试指标
 
 | 指标 | 说明 |
 |------|------|
-| insert | 插入 100,000 条记录 + `session.commit()` |
+| insert | 插入 10,000 条记录 + `session.commit()` |
 | save | `db.flush()` 持久化到磁盘 |
 | query_pk | 100 次主键查询 |
 | query_indexed | 100 次索引等值查询 |
@@ -19,41 +21,40 @@
 | reopen_first_query | 重开后首条主键读取 |
 | file_size | 最终文件体积 |
 
-## Pytucky 1.0.0 vs Pytuck 1.2.1
+## 当前 Pytucky vs Pytuck 基准结果
 
-同机、同 schema、同数据量、同 Python 版本下的对比：
+当前结果在同一台机器、同一 Python 3.13.11 环境下，对 `pytucky 1.2.0` 与 `pytuck 1.3.0` 使用相同 schema、相同数据量与相同测试流程连续运行 3 轮取均值：
 
-| 指标 | Pytucky 1.0.0 | Pytuck 1.2.1 | 变化 |
+| 指标 | Pytucky 1.2.0 | Pytuck 1.3.0 | 变化 |
 |------|---------------|--------------|------|
-| insert | 800.1ms | 780.5ms | +2.5% |
-| save | 592.3ms | 597.2ms | **-0.8%** |
-| query_pk | 1.86ms | 1.62ms | +14.5% |
-| query_indexed | 1.79ms | 1.72ms | +3.5% |
-| load | 122.6ms | 132.3ms | **-7.3%** |
-| reopen | 124.0ms | 132.1ms | **-6.1%** |
-| reopen_first_query | 89.1μs | 51.9μs | +71.6% |
-| file_size | 9.97MB | 9.97MB | 0% |
+| insert | 35.2ms | 30.1ms | +17.2% |
+| save | 25.2ms | 22.2ms | +13.1% |
+| query_pk | 0.75ms | 0.69ms | +9.4% |
+| query_indexed | 0.70ms | 0.64ms | +8.8% |
+| load | 4.71ms | 4.74ms | -0.6% |
+| reopen | 4.77ms | 4.72ms | +1.0% |
+| reopen_first_query | 32.6μs | 35.6μs | -8.2% |
+| file_size | 0.92MB | 0.92MB | 0% |
 
 **说明**：
 
-- 两个库共享 PTK7 格式，相同 schema 下文件体积完全一致。
-- 写入路径（save）和读取路径（load / reopen）性能接近，Pytucky 在 load/reopen 上略优。
-- Pytuck 在点查询（query_pk / reopen_first_query）上略快，与其 v1.2.1 中更激进的索引元数据预加载有关。
-- 总体差异在噪声范围内，两者底层格式一致，性能基本持平。
+- `query_pk` 与 `query_indexed` 均为 100 次查询总耗时。
+- `reopen_first_query` 为 reopen 后首次主键点查耗时。
+- 本表的唯一变量是库实现；环境、schema、数据量与测试顺序保持一致。
 
 ## 如何选择
 
 - **受限 Python 环境**（Ren'Py 等无法安装第三方依赖的场景）：选择 Pytucky，零依赖、单文件。
 - **需要多格式导出**（JSON、CSV、SQLite、Excel 等）：选择 Pytuck，支持 8 种存储引擎。
-- **只需要高性能单文件数据库**：两者均可，性能一致。
+- **只需要高性能单文件数据库**：建议在目标平台上按本文命令复测后再做选择。
 
 ## 复现命令
 
 ```bash
 # Pytucky
-uv run python tests/benchmark/benchmark.py -n 100000 --extended
+uv run python tests/benchmark/benchmark.py -n 10000 --extended
 
 # 输出 JSON
-uv run python tests/benchmark/benchmark.py -n 100000 --extended \
-    --output-json tests/benchmark/benchmark_output/pytucky-v7-100000.json
+uv run python tests/benchmark/benchmark.py -n 10000 --extended \
+    --output-json tests/benchmark/benchmark_output/pytucky-v7-10000.json
 ```

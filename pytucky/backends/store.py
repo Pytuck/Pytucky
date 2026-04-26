@@ -17,9 +17,11 @@ from ..common.exceptions import (
     ValidationError,
 )
 from ..core.orm import Column
+from ..core.index import BaseIndex
 from ..core.types import TypeRegistry
 from .format import (
     NULL_BITMAP_STRUCT,
+    PK_DIR_INT_STRUCT,
     ColumnIndexMeta,
     FileHeader,
     PkDirEntry,
@@ -79,6 +81,8 @@ class TableState:
     pk_index: dict[Any, tuple[int, int]] = field(default_factory=dict)
     index_meta: dict[str, Any] = field(default_factory=dict)
     overlay: TableOverlay = field(default_factory=TableOverlay)
+    decode_columns: list[Column] | None = None
+    decode_codecs: list[Any] | None = None
 
 @dataclass(frozen=True)
 class _EncodedTable:
@@ -127,6 +131,13 @@ class Store:
             data_offset=0,
             data_size=0,
         )
+
+    def _get_decode_layout(self, state: TableState) -> tuple[list[Column], list[Any]]:
+        if state.decode_columns is None or state.decode_codecs is None:
+            decode_columns = _payload_columns(state.columns, state.primary_key)
+            state.decode_columns = decode_columns
+            state.decode_codecs = [TypeRegistry.get_codec(column.col_type)[1] for column in decode_columns]
+        return state.decode_columns, state.decode_codecs
 
     @_store_locked
     def close(self) -> None:
@@ -226,26 +237,117 @@ class Store:
                 tables[ref.name] = state
             self._tables = tables
 
+    def _build_lazy_indexes(
+        self,
+        state: TableState,
+        hash_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+        sorted_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+    ) -> dict[str, BaseIndex]:
+        indexes: dict[str, BaseIndex] = {}
+        for col_name in state.index_meta:
+            col_obj = next((column for column in state.columns if column.name == col_name), None)
+            if col_obj is None:
+                continue
+            if col_obj.index == 'sorted':
+                indexes[col_name] = sorted_index_factory(col_name, self, state.name, col_obj)
+            else:
+                indexes[col_name] = hash_index_factory(col_name, self, state.name, col_obj)
+        return indexes
+
+    def _bind_lazy_table(
+        self,
+        table: Any,
+        state: TableState,
+        backend: Any,
+        file_path: Path,
+        hash_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+        sorted_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+    ) -> None:
+        from ..core.storage import _PkOffsetView
+
+        table.next_id = state.next_id
+        table._backend = backend
+        table._data_file = file_path
+        table._lazy_loaded = True
+        table._pk_offsets = _PkOffsetView(state.pk_index)
+        table.indexes = self._build_lazy_indexes(state, hash_index_factory, sorted_index_factory)
+
     @_store_locked
-    def select(self, table_name: str, pk: Any) -> dict[str, Any]:
+    def load_tables(
+        self,
+        backend: Any,
+        file_path: Path,
+        *,
+        hash_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+        sorted_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+    ) -> dict[str, Any]:
+        from ..core.storage import Table
+
+        tables: dict[str, Any] = {}
+        for name, state in self._tables.items():
+            table = Table(state.name, state.columns, state.primary_key, None)
+            self._bind_lazy_table(
+                table,
+                state,
+                backend,
+                file_path,
+                hash_index_factory,
+                sorted_index_factory,
+            )
+            table.reset_dirty()
+            tables[name] = table
+        return tables
+
+    @_store_locked
+    def rebind_lazy_table(
+        self,
+        table: Any,
+        state: TableState,
+        backend: Any,
+        file_path: Path,
+        *,
+        hash_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+        sorted_index_factory: Callable[[str, "Store", str, Column], BaseIndex],
+    ) -> None:
+        self._bind_lazy_table(
+            table,
+            state,
+            backend,
+            file_path,
+            hash_index_factory,
+            sorted_index_factory,
+        )
+
+    def _select_record(self, table_name: str, pk: Any, *, copy_result: bool) -> dict[str, Any]:
         state = self.table_state(table_name)
         pk = self._normalize_pk(state, pk)
         overlay = state.overlay
         if pk in overlay.deleted:
             raise RecordNotFoundError(table_name, pk)
         if pk in overlay.updated:
-            return dict(overlay.updated[pk])
+            record = overlay.updated[pk]
+            return dict(record) if copy_result else record
         if pk in overlay.inserted:
-            return dict(overlay.inserted[pk])
+            record = overlay.inserted[pk]
+            return dict(record) if copy_result else record
         if pk in overlay.row_cache:
-            return dict(overlay.row_cache[pk])
+            record = overlay.row_cache[pk]
+            return dict(record) if copy_result else record
         try:
             offset, length = state.pk_index[pk]
         except KeyError as exc:
             raise RecordNotFoundError(table_name, pk) from exc
         record = self._read_row_at(state, pk, offset, length)
         overlay.row_cache[pk] = record
-        return dict(record)
+        return dict(record) if copy_result else record
+
+    @_store_locked
+    def select(self, table_name: str, pk: Any) -> dict[str, Any]:
+        return self._select_record(table_name, pk, copy_result=True)
+
+    @_store_locked
+    def select_raw(self, table_name: str, pk: Any) -> dict[str, Any]:
+        return self._select_record(table_name, pk, copy_result=False)
 
     @_store_locked
     def insert(self, table_name: str, data: dict[str, Any]) -> Any:
@@ -612,8 +714,7 @@ class Store:
             and pk not in state.overlay.updated
         ]
         if disk_pks:
-            payload_cols = _payload_columns(state.columns, state.primary_key)
-            codecs = [TypeRegistry.get_codec(c.col_type)[1] for c in payload_cols]
+            decode_columns, decode_codecs = self._get_decode_layout(state)
             # If cipher is None, bulk read the entire data blob for performance.
             if self._cipher is None:
                 data_blob = self._read_region(state.data_offset, state.data_size)
@@ -623,7 +724,13 @@ class Store:
                     row_blob = data_blob[rel_off:rel_off + length]
                     payload_length = ROW_LENGTH_STRUCT.unpack(row_blob[:ROW_LENGTH_STRUCT.size])[0]
                     payload = row_blob[ROW_LENGTH_STRUCT.size:]
-                    record = decode_row(state.columns, payload, pk_name=state.primary_key, codecs=codecs)
+                    record = decode_row(
+                        state.columns,
+                        payload,
+                        pk_name=state.primary_key,
+                        payload_columns=decode_columns,
+                        codecs=decode_codecs,
+                    )
                     if state.primary_key is not None:
                         record[state.primary_key] = pk
                     live[pk] = record
@@ -636,7 +743,13 @@ class Store:
                         raise SerializationError("Not enough data to decode row length")
                     payload_length = ROW_LENGTH_STRUCT.unpack(row_blob[:ROW_LENGTH_STRUCT.size])[0]
                     payload = row_blob[ROW_LENGTH_STRUCT.size:]
-                    record = decode_row(state.columns, payload, pk_name=state.primary_key, codecs=codecs)
+                    record = decode_row(
+                        state.columns,
+                        payload,
+                        pk_name=state.primary_key,
+                        payload_columns=decode_columns,
+                        codecs=decode_codecs,
+                    )
                     if state.primary_key is not None:
                         record[state.primary_key] = pk
                     live[pk] = record
@@ -677,7 +790,14 @@ class Store:
             raise SerializationError(
                 f"Row payload length mismatch: expected {payload_length}, got {len(payload)}"
             )
-        record = decode_row(state.columns, payload, pk_name=state.primary_key)
+        decode_columns, decode_codecs = self._get_decode_layout(state)
+        record = decode_row(
+            state.columns,
+            payload,
+            pk_name=state.primary_key,
+            payload_columns=decode_columns,
+            codecs=decode_codecs,
+        )
         if state.primary_key is not None:
             record[state.primary_key] = pk
         return record
@@ -895,7 +1015,7 @@ class Store:
             blob = self._decrypt_region(ref.pk_dir_offset, blob)
         else:
             blob = self._read_region(ref.pk_dir_offset, ref.pk_dir_size)
-        entry_size = PkDirEntry(pk=0, offset=0, length=0).pack_int().__len__()
+        entry_size = PK_DIR_INT_STRUCT.size
         if ref.record_count == 0:
             return pk_index
         if len(blob) < entry_size:
@@ -903,20 +1023,21 @@ class Store:
         if len(blob) % entry_size != 0:
             raise SerializationError("PTK7 pk dir size is invalid")
 
-        entries = []
+        data_end = ref.data_offset + max(1, ref.data_size)
+        needs_rebase = False
         offset = 0
         while offset < len(blob):
-            entries.append(PkDirEntry.unpack_int(blob[offset : offset + entry_size]))
+            entry = PkDirEntry.unpack_int(blob[offset : offset + entry_size])
+            if not (ref.data_offset <= entry.offset < data_end):
+                needs_rebase = True
+            pk_index[entry.pk] = (entry.offset, entry.length)
             offset += entry_size
 
-        data_end = ref.data_offset + max(1, ref.data_size)
-        is_absolute = all(ref.data_offset <= entry.offset < data_end for entry in entries)
-        for entry in entries:
-            if is_absolute:
-                abs_off = entry.offset
-            else:
-                abs_off = ref.data_offset + entry.offset
-            pk_index[entry.pk] = (abs_off, entry.length)
+        if needs_rebase:
+            return {
+                pk: (ref.data_offset + entry_offset, length)
+                for pk, (entry_offset, length) in pk_index.items()
+            }
         return pk_index
 
     def _decode_index_meta(self, blob: bytes, ref: TableBlockRef) -> dict[str, ColumnIndexMeta]:

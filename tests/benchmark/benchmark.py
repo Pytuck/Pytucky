@@ -6,15 +6,12 @@ import argparse
 import json
 import platform
 import shutil
-import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
 from types import TracebackType
 from typing import Any
-
-# Ensure project root on path.
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from pytucky import Column, PureBaseModel, Session, Storage, declarative_base, insert, select
 
@@ -223,9 +220,7 @@ def build_temp_dir(keep: bool) -> Path:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         return OUTPUT_DIR
 
-    temp_dir = Path.cwd() / TEMP_DIR_NAME
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    return temp_dir
+    return Path(tempfile.mkdtemp(prefix=f"{TEMP_DIR_NAME.lstrip('.')}"))
 
 def cleanup_temp_dir(temp_dir: Path, keep: bool) -> None:
     if keep or not temp_dir.exists():

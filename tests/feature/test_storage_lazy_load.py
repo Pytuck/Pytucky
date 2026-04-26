@@ -2,6 +2,7 @@ from pathlib import Path
 import pytest
 
 from pytucky import Storage, Column
+from pytucky.query import Condition
 
 
 def build_user_storage(path: Path) -> Storage:
@@ -34,6 +35,24 @@ def test_lazy_table_select_does_not_require_full_materialization(tmp_path: Path)
     assert getattr(table, "data", {}) == {} or table.data is None
     assert reopened.select("users", 1)["name"] == "Alice"
     reopened.close()
+
+
+@pytest.mark.feature
+def test_lazy_table_select_returns_isolated_record_copy(tmp_path: Path) -> None:
+    db_path = tmp_path / "lazy-select-copy.pytucky"
+    storage = build_user_storage(db_path)
+    storage.insert("users", {"id": 1, "name": "Alice", "age": 20})
+    storage.flush()
+    storage.close()
+
+    reopened = Storage(file_path=str(db_path))
+    try:
+        record = reopened.select("users", 1)
+        record["name"] = "Mutated"
+
+        assert reopened.select("users", 1)["name"] == "Alice"
+    finally:
+        reopened.close()
 
 
 @pytest.mark.feature
@@ -118,6 +137,31 @@ def test_read_lazy_record_rebuilds_missing_offset_mapping(tmp_path: Path) -> Non
 
 
 @pytest.mark.feature
+def test_reopened_lazy_table_shares_backend_pk_offset_view(tmp_path: Path) -> None:
+    db_path = tmp_path / "lazy-offset-view.pytucky"
+    storage = build_user_storage(db_path)
+    storage.insert("users", {"id": 1, "name": "Alice", "age": 20})
+    storage.flush()
+    storage.close()
+
+    reopened = Storage(file_path=str(db_path))
+    try:
+        table = reopened.get_table("users")
+        backend = reopened.backend
+        assert backend is not None
+
+        state = backend.store.table_state("users")
+        assert table._pk_offsets is not None
+        assert table._pk_offsets[1] == state.pk_index[1][0]
+
+        reopened.delete("users", 1)
+
+        assert 1 not in state.pk_index
+    finally:
+        reopened.close()
+
+
+@pytest.mark.feature
 def test_read_lazy_record_prefers_offset_mapping_over_passed_pk(tmp_path: Path) -> None:
     db_path = tmp_path / "lazy-offset-prefer-offset.pytucky"
     storage = build_user_storage(db_path)
@@ -138,6 +182,42 @@ def test_read_lazy_record_prefers_offset_mapping_over_passed_pk(tmp_path: Path) 
 
         assert record["name"] == "Alice"
         assert record["id"] == 1
+    finally:
+        reopened.close()
+
+
+@pytest.mark.feature
+def test_lazy_table_flush_rebinds_current_storage_offsets_and_indexes(tmp_path: Path) -> None:
+    db_path = tmp_path / "lazy-flush-rebind-current-storage.pytucky"
+    storage = Storage(file_path=str(db_path))
+    storage.create_table(
+        "users",
+        [
+            Column(int, name="id", primary_key=True),
+            Column(str, name="name", index=True),
+            Column(int, name="age"),
+        ],
+    )
+    storage.insert("users", {"id": 1, "name": "Alice", "age": 20})
+    storage.flush()
+    storage.close()
+
+    reopened = Storage(file_path=str(db_path))
+    try:
+        table = reopened.get_table("users")
+        backend = reopened.backend
+        assert backend is not None
+
+        reopened.insert("users", {"id": 2, "name": "Bob", "age": 30})
+        reopened.flush()
+
+        state = backend.store.table_state("users")
+        assert table._pk_offsets is not None
+        assert table._pk_offsets[1] == state.pk_index[1][0]
+        assert table._pk_offsets[2] == state.pk_index[2][0]
+
+        rows = reopened.query("users", [Condition("name", "=", "Bob")])
+        assert [row["id"] for row in rows] == [2]
     finally:
         reopened.close()
 

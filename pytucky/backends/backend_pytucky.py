@@ -8,7 +8,7 @@ from typing import Any, Callable, Concatenate, ParamSpec, TypeVar
 from ..backends.store import Store, TableState, TableOverlay
 from ..core.storage import Table
 from ..core.orm import Column
-from ..core.index import BaseIndex
+from ..core.index import HashIndex, SortedIndex
 from ..common.options import PytuckBackendOptions
 from ..common.exceptions import SerializationError
 from .base import StorageBackend
@@ -27,6 +27,201 @@ def _backend_locked(
             return method(self, *args, **kwargs)
 
     return wrapper
+
+
+class HashIndexProxy(HashIndex):
+    """延迟物化哈希索引代理。"""
+
+    def __init__(self, column_name: str, store: Store, table_name: str, column_obj: Column):
+        super().__init__(column_name)
+        self._store = store
+        self._table = table_name
+        self._column = column_obj
+        self._materialized = False
+        self._added: dict[Any, set[Any]] = {}
+        self._removed: dict[Any, set[Any]] = {}
+
+    def _materialize(self) -> None:
+        if self._materialized:
+            return
+        state = self._store.table_state(self._table)
+        cim = state.index_meta.get(self.column_name)
+        if cim is not None:
+            blob = self._store._read_region(cim.offset, cim.size)
+            from . import index as idx_mod
+            pairs = idx_mod.decode_sorted_pairs(blob, self._column)
+            for val, pk in pairs:
+                HashIndex.insert(self, val, pk)
+
+        overlay = state.overlay
+        col_name = self.column_name
+        for pk, rec in overlay.inserted.items():
+            if pk not in overlay.deleted:
+                value = rec.get(col_name)
+                if value is not None:
+                    HashIndex.insert(self, value, pk)
+        for pk, rec in overlay.updated.items():
+            if pk not in overlay.deleted:
+                value = rec.get(col_name)
+                if value is not None:
+                    HashIndex.insert(self, value, pk)
+        for pk in overlay.deleted:
+            for pk_set in self.map.values():
+                pk_set.discard(pk)
+
+        for value, pks in self._added.items():
+            for pk in pks:
+                HashIndex.insert(self, value, pk)
+        for value, pks in self._removed.items():
+            for pk in pks:
+                HashIndex.remove(self, value, pk)
+        self._added.clear()
+        self._removed.clear()
+        self._materialized = True
+
+    def insert(self, value: Any, pk: Any) -> None:
+        if value is None:
+            return
+        if self._materialized:
+            HashIndex.insert(self, value, pk)
+            return
+        self._added.setdefault(value, set()).add(pk)
+        if value in self._removed:
+            self._removed[value].discard(pk)
+
+    def remove(self, value: Any, pk: Any) -> None:
+        if value is None:
+            return
+        if self._materialized:
+            HashIndex.remove(self, value, pk)
+            return
+        if value in self._added:
+            self._added[value].discard(pk)
+            if not self._added[value]:
+                del self._added[value]
+        self._removed.setdefault(value, set()).add(pk)
+
+    def lookup(self, value: Any):
+        self._materialize()
+        return HashIndex.lookup(self, value)
+
+
+class SortedIndexProxy(SortedIndex):
+    """延迟物化有序索引代理。"""
+
+    def __init__(self, column_name: str, store: Store, table_name: str, column_obj: Column):
+        super().__init__(column_name)
+        self._store = store
+        self._table = table_name
+        self._column = column_obj
+        self._materialized = False
+        self._added: dict[Any, set[Any]] = {}
+        self._removed: dict[Any, set[Any]] = {}
+
+    def _materialize(self) -> None:
+        if self._materialized:
+            return
+        state = self._store.table_state(self._table)
+        cim = state.index_meta.get(self.column_name)
+        if cim is not None:
+            blob = self._store._read_region(cim.offset, cim.size)
+            from . import index as idx_mod
+            pairs = idx_mod.decode_sorted_pairs(blob, self._column)
+            for val, pk in pairs:
+                SortedIndex.insert(self, val, pk)
+
+        overlay = state.overlay
+        col_name = self.column_name
+        for pk, rec in overlay.inserted.items():
+            if pk not in overlay.deleted:
+                value = rec.get(col_name)
+                if value is not None:
+                    SortedIndex.insert(self, value, pk)
+        for pk, rec in overlay.updated.items():
+            if pk not in overlay.deleted:
+                value = rec.get(col_name)
+                if value is not None:
+                    SortedIndex.insert(self, value, pk)
+        for pk in overlay.deleted:
+            for pk_set in self.value_to_pks.values():
+                pk_set.discard(pk)
+
+        for value, pks in self._added.items():
+            for pk in pks:
+                SortedIndex.insert(self, value, pk)
+        for value, pks in self._removed.items():
+            for pk in pks:
+                SortedIndex.remove(self, value, pk)
+        self._added.clear()
+        self._removed.clear()
+        self._materialized = True
+
+    def insert(self, value: Any, pk: Any) -> None:
+        if value is None:
+            return
+        if self._materialized:
+            SortedIndex.insert(self, value, pk)
+            return
+        self._added.setdefault(value, set()).add(pk)
+        if value in self._removed:
+            self._removed[value].discard(pk)
+
+    def remove(self, value: Any, pk: Any) -> None:
+        if value is None:
+            return
+        if self._materialized:
+            SortedIndex.remove(self, value, pk)
+            return
+        if value in self._added:
+            self._added[value].discard(pk)
+            if not self._added[value]:
+                del self._added[value]
+        self._removed.setdefault(value, set()).add(pk)
+
+    def lookup(self, value: Any):
+        self._materialize()
+        return SortedIndex.lookup(self, value)
+
+    def supports_range_query(self) -> bool:
+        return True
+
+    def range_query(self, min_val=None, max_val=None, include_min=True, include_max=True):
+        if self._materialized:
+            return SortedIndex.range_query(self, min_val, max_val, include_min, include_max)
+        state = self._store.table_state(self._table)
+        cim = state.index_meta.get(self.column_name)
+        result: set[Any] = set()
+        if cim is not None:
+            blob = self._store._read_region(cim.offset, cim.size)
+            from ..backends import index
+            pks = index.range_search_sorted_pairs(blob, self._column, min_val, max_val, include_min, include_max)
+            result.update(pks)
+        else:
+            for pk in list(state.pk_index.keys()):
+                try:
+                    rec = self._store.select(self._table, pk)
+                except Exception:
+                    continue
+                value = rec.get(self.column_name)
+                if value is None:
+                    continue
+                if min_val is not None and ((value < min_val) or (not include_min and value == min_val)):
+                    continue
+                if max_val is not None and ((value > max_val) or (not include_max and value == max_val)):
+                    continue
+                result.add(pk)
+
+        for value, pks in self._added.items():
+            if min_val is not None and ((value < min_val) or (not include_min and value == min_val)):
+                continue
+            if max_val is not None and ((value > max_val) or (not include_max and value == max_val)):
+                continue
+            result.update(pks)
+        for value, pks in self._removed.items():
+            if value in result:
+                result.difference_update(pks)
+        return result
+
 
 class PytuckyBackend(StorageBackend):
     """Adapter backend that exposes Store to the high-level Storage API.
@@ -103,253 +298,12 @@ class PytuckyBackend(StorageBackend):
 
     @_backend_locked
     def load(self) -> dict[str, Table]:
-        # Map Store table states to core.Table objects without materializing rows
-        tables: dict[str, Table] = {}
-        for name, state in self.store._tables.items():
-            # build Column list expected by Table
-            cols = [col for col in state.columns]
-            # state.columns is list[Column]
-            table = Table(state.name, state.columns, state.primary_key, None)
-            table.next_id = state.next_id
-            table._backend = self
-            table._data_file = self.file_path
-            table._lazy_loaded = True
-            # pk_index in Store maps pk -> (offset,length)
-            table._pk_offsets = {pk: off for pk, (off, length) in state.pk_index.items()}
-
-            # restore indexes lazily: create proxy index objects that defer decoding to lookup/range operations
-            # proxies keep local overlay for in-memory insert/remove and call Store helpers on demand
-            from ..core.index import HashIndex, SortedIndex
-
-            class HashIndexProxy(HashIndex):
-                """延迟物化哈希索引代理。
-
-                首次 lookup 时从磁盘解码索引 blob 并填充父类 HashIndex 的
-                内存结构，后续 lookup 直接走 O(1) 的 dict 查找。
-                物化前通过 _added/_removed overlay 暂存内存变更，
-                物化时合并进父类数据结构。
-                """
-
-                def __init__(self, column_name: str, store: 'Store', table_name: str, column_obj: Column):
-                    super().__init__(column_name)
-                    self._store = store
-                    self._table = table_name
-                    self._column = column_obj
-                    self._materialized = False
-                    self._added: dict[Any, set] = {}
-                    self._removed: dict[Any, set] = {}
-
-                def _materialize(self) -> None:
-                    if self._materialized:
-                        return
-                    # 从磁盘读取索引 blob 并解码
-                    state = self._store.table_state(self._table)
-                    cim = state.index_meta.get(self.column_name)
-                    if cim is not None:
-                        blob = self._store._read_region(cim.offset, cim.size)
-                        from . import index as idx_mod
-                        pairs = idx_mod.decode_sorted_pairs(blob, self._column)
-                        for val, pk in pairs:
-                            HashIndex.insert(self, val, pk)
-                    # 合并 Store overlay（inserted/updated/deleted）
-                    overlay = state.overlay
-                    col_name = self.column_name
-                    for pk, rec in overlay.inserted.items():
-                        if pk not in overlay.deleted:
-                            v = rec.get(col_name)
-                            if v is not None:
-                                HashIndex.insert(self, v, pk)
-                    for pk, rec in overlay.updated.items():
-                        if pk not in overlay.deleted:
-                            v = rec.get(col_name)
-                            if v is not None:
-                                HashIndex.insert(self, v, pk)
-                    for pk in overlay.deleted:
-                        # 需要知道被删除记录的旧值才能从索引中移除
-                        # 但 overlay 不保存旧值，已在磁盘索引中被包含
-                        # 用暴力方式：遍历 map 移除该 pk
-                        for pk_set in self.map.values():
-                            pk_set.discard(pk)
-                    # 合并 proxy 自身的 overlay
-                    for val, pks in self._added.items():
-                        for pk in pks:
-                            HashIndex.insert(self, val, pk)
-                    for val, pks in self._removed.items():
-                        for pk in pks:
-                            HashIndex.remove(self, val, pk)
-                    self._added.clear()
-                    self._removed.clear()
-                    self._materialized = True
-
-                def insert(self, value: Any, pk: Any) -> None:
-                    if value is None:
-                        return
-                    if self._materialized:
-                        HashIndex.insert(self, value, pk)
-                    else:
-                        self._added.setdefault(value, set()).add(pk)
-                        if value in self._removed:
-                            self._removed[value].discard(pk)
-
-                def remove(self, value: Any, pk: Any) -> None:
-                    if value is None:
-                        return
-                    if self._materialized:
-                        HashIndex.remove(self, value, pk)
-                    else:
-                        if value in self._added:
-                            self._added[value].discard(pk)
-                            if not self._added[value]:
-                                del self._added[value]
-                        self._removed.setdefault(value, set()).add(pk)
-
-                def lookup(self, value: Any):
-                    self._materialize()
-                    return HashIndex.lookup(self, value)
-
-            class SortedIndexProxy(SortedIndex):
-                """延迟物化有序索引代理。
-
-                首次 lookup/range_query 时从磁盘解码索引并填充父类
-                SortedIndex 的内存结构，后续操作走 O(log n) 的二分查找。
-                """
-
-                def __init__(self, column_name: str, store: 'Store', table_name: str, column_obj: Column):
-                    super().__init__(column_name)
-                    self._store = store
-                    self._table = table_name
-                    self._column = column_obj
-                    self._materialized = False
-                    self._added: dict[Any, set] = {}
-                    self._removed: dict[Any, set] = {}
-
-                def _materialize(self) -> None:
-                    if self._materialized:
-                        return
-                    state = self._store.table_state(self._table)
-                    cim = state.index_meta.get(self.column_name)
-                    if cim is not None:
-                        blob = self._store._read_region(cim.offset, cim.size)
-                        from . import index as idx_mod
-                        pairs = idx_mod.decode_sorted_pairs(blob, self._column)
-                        for val, pk in pairs:
-                            SortedIndex.insert(self, val, pk)
-                    # 合并 Store overlay
-                    overlay = state.overlay
-                    col_name = self.column_name
-                    for pk, rec in overlay.inserted.items():
-                        if pk not in overlay.deleted:
-                            v = rec.get(col_name)
-                            if v is not None:
-                                SortedIndex.insert(self, v, pk)
-                    for pk, rec in overlay.updated.items():
-                        if pk not in overlay.deleted:
-                            v = rec.get(col_name)
-                            if v is not None:
-                                SortedIndex.insert(self, v, pk)
-                    for pk in overlay.deleted:
-                        for pk_set in self.value_to_pks.values():
-                            pk_set.discard(pk)
-                    # 合并 proxy overlay
-                    for val, pks in self._added.items():
-                        for pk in pks:
-                            SortedIndex.insert(self, val, pk)
-                    for val, pks in self._removed.items():
-                        for pk in pks:
-                            SortedIndex.remove(self, val, pk)
-                    self._added.clear()
-                    self._removed.clear()
-                    self._materialized = True
-
-                def insert(self, value: Any, pk: Any) -> None:
-                    if value is None:
-                        return
-                    if self._materialized:
-                        SortedIndex.insert(self, value, pk)
-                    else:
-                        self._added.setdefault(value, set()).add(pk)
-                        if value in self._removed:
-                            self._removed[value].discard(pk)
-
-                def remove(self, value: Any, pk: Any) -> None:
-                    if value is None:
-                        return
-                    if self._materialized:
-                        SortedIndex.remove(self, value, pk)
-                    else:
-                        if value in self._added:
-                            self._added[value].discard(pk)
-                            if not self._added[value]:
-                                del self._added[value]
-                        self._removed.setdefault(value, set()).add(pk)
-
-                def lookup(self, value: Any):
-                    self._materialize()
-                    return SortedIndex.lookup(self, value)
-
-                def supports_range_query(self) -> bool:
-                    return True
-
-                def range_query(self, min_val=None, max_val=None, include_min=True, include_max=True):
-                    if self._materialized:
-                        return SortedIndex.range_query(self, min_val, max_val, include_min, include_max)
-                    # 未物化时保持原有 blob-based 快速路径
-                    state = self._store.table_state(self._table)
-                    cim = state.index_meta.get(self.column_name)
-                    result = set()
-                    if cim is not None:
-                        blob = self._store._read_region(cim.offset, cim.size)
-                        from ..backends import index
-                        pks = index.range_search_sorted_pairs(blob, self._column, min_val, max_val, include_min, include_max)
-                        result.update(pks)
-                    else:
-                        for pk in list(state.pk_index.keys()):
-                            try:
-                                rec = self._store.select(self._table, pk)
-                            except Exception:
-                                continue
-                            val = rec.get(self.column_name)
-                            if val is None:
-                                continue
-                            if min_val is not None:
-                                if (val < min_val) or (not include_min and val == min_val):
-                                    continue
-                            if max_val is not None:
-                                if (val > max_val) or (not include_max and val == max_val):
-                                    continue
-                            result.add(pk)
-                    # 合并 proxy overlays
-                    for val, pks in self._added.items():
-                        if min_val is not None and ((val < min_val) or (not include_min and val == min_val)):
-                            continue
-                        if max_val is not None and ((val > max_val) or (not include_max and val == max_val)):
-                            continue
-                        result.update(pks)
-                    for val, pks in self._removed.items():
-                        if val in result:
-                            result.difference_update(pks)
-                    return result
-
-            for col_name, cim in state.index_meta.items():
-                # find column object
-                col_obj = None
-                for c in state.columns:
-                    if c.name == col_name:
-                        col_obj = c
-                        break
-                if col_obj is None:
-                    continue
-                index_obj: BaseIndex
-                if col_obj.index == 'sorted':
-                    index_obj = SortedIndexProxy(col_name, self.store, state.name, col_obj)
-                else:
-                    index_obj = HashIndexProxy(col_name, self.store, state.name, col_obj)
-                table.indexes[col_name] = index_obj
-
-            # leave table.data empty to preserve lazy behavior
-            table.reset_dirty()
-            tables[name] = table
-        return tables
+        return self.store.load_tables(
+            self,
+            self.file_path,
+            hash_index_factory=HashIndexProxy,
+            sorted_index_factory=SortedIndexProxy,
+        )
 
     def populate_tables_with_data(self, tables: dict[str, Table]) -> None:
         # Ensure all lazy tables materialize via Table._ensure_all_loaded
@@ -358,11 +312,21 @@ class PytuckyBackend(StorageBackend):
                 table._ensure_all_loaded()
 
     @_backend_locked
-    def read_lazy_record(self, file_path: Path, offset: int, columns: dict[str, Column], pk: Any, *, table_name: str | None = None) -> dict[str, Any]:
+    def read_lazy_record(
+        self,
+        file_path: Path,
+        offset: int,
+        columns: dict[str, Column],
+        pk: Any,
+        *,
+        table_name: str | None = None,
+        copy_result: bool = True,
+    ) -> dict[str, Any]:
         try:
+            select_record = self.store.select if copy_result else self.store.select_raw
             # 快速路径：调用方已知 table_name，直接 select，跳过 offset_map
             if table_name is not None:
-                return self.store.select(table_name, pk)
+                return select_record(table_name, pk)
             # 慢路径：延迟构建 offset_map 后查找
             if self._offset_map is None:
                 self._rebuild_offset_map()
@@ -380,9 +344,25 @@ class PytuckyBackend(StorageBackend):
             if entry is None:
                 raise KeyError(f'Offset {offset} not known')
             resolved_table, resolved_pk = entry
-            return self.store.select(resolved_table, resolved_pk)
+            return select_record(resolved_table, resolved_pk)
         except Exception as exc:
             raise SerializationError(f'V7 read lazy record failed: {exc}') from exc
+
+    def _rebind_lazy_tables(self, tables: dict[str, Table]) -> None:
+        for name, table in tables.items():
+            if not getattr(table, '_lazy_loaded', False):
+                continue
+            state = self.store._tables.get(name)
+            if state is None:
+                continue
+            self.store.rebind_lazy_table(
+                table,
+                state,
+                self,
+                self.file_path,
+                hash_index_factory=HashIndexProxy,
+                sorted_index_factory=SortedIndexProxy,
+            )
 
     @_backend_locked
     def save(self, tables: dict[str, Table], *, changed_tables: set | None = None) -> None:
@@ -390,64 +370,20 @@ class PytuckyBackend(StorageBackend):
         # Rebuild directly from table scan results for changed tables to avoid per-row Store.insert overhead.
         # For unchanged tables, reuse existing Store.TableState to avoid materializing lazy tables.
         changed_tables = set(changed_tables or set())
-        # capture previous on-disk states to allow reusing unchanged tables without materializing
-        prev_states: dict[str, TableState] = {k: v for k, v in getattr(self.store, '_tables', {}).items()}
-        # close current store to prepare writing new file
-        # preserve loaded encryption level so that reopening with only a password
-        # can keep writing back the same encryption level
-        prev_loaded_encryption = getattr(self.store, '_loaded_encryption_level', None)
-        self.store.close()
-        # create a fresh store object representing the new on-disk layout
-        # ensure backend options are passed through when recreating Store
-        self.store = Store(self.file_path, self.options, open_existing=False)
-        # restore loaded encryption level into the fresh Store instance so flush() can
-        # pick it up when backend_options.encryption is not explicitly set
-        # Only restore previous loaded encryption level when caller did not explicitly
-        # set an encryption level in backend options. If backend options specify
-        # encryption (including None explicitly), prefer that value and do not
-        # overwrite the newly created Store's state.
-        if prev_loaded_encryption is not None and getattr(self.options, 'encryption', None) is None:
-            self.store._loaded_encryption_level = prev_loaded_encryption
+        prev_states: dict[str, TableState] = dict(getattr(self.store, '_tables', {}))
         rebuilt_tables: dict[str, TableState] = {}
 
         for name, table in tables.items():
             if name not in changed_tables and name in prev_states:
-                # build a NEW TableState copying scalar data from previous state but with a fresh overlay
-                prev = prev_states[name]
-                rebuilt = TableState(
-                    name=prev.name,
-                    columns=list(prev.columns),
-                    primary_key=prev.primary_key,
-                    next_id=table.next_id,
-                    record_count=prev.record_count,
-                    data_offset=prev.data_offset,
-                    data_size=prev.data_size,
-                    pk_index=dict(prev.pk_index),
-                    index_meta=dict(prev.index_meta),
-                    overlay=TableOverlay(),
-                )
-                rebuilt_tables[name] = rebuilt
+                rebuilt_tables[name] = prev_states[name]
                 continue
 
-            # build fresh state from high-level table (changed or absent prev state)
             cols = list(table.columns.values())
-            # Fast-path for changed lazy tables: if table is lazy-loaded and schema unchanged and
-            # we have a previous on-disk state, attempt to construct overlay from explicit dirty PK sets.
-            # However, for robustness we require that all inserted/updated dirty PKs have corresponding
-            # in-memory records present in table.data. If any are missing, fall back to the safe full scan
-            # path (do not attempt to recover via table.get or similar, since updated items may need old on-disk
-            # values).
             if table._lazy_loaded and name in prev_states and not table._schema_dirty and getattr(table, 'inserted', None) is not None:
-                # quick pre-check: ensure inserted/updated PKs are present in table.data
                 inserted_set = set(getattr(table, 'inserted', set()))
                 updated_set = set(getattr(table, 'updated', set()))
-                missing_pk = False
-                for pk in inserted_set | updated_set:
-                    if pk not in table.data:
-                        missing_pk = True
-                        break
+                missing_pk = any(pk not in table.data for pk in inserted_set | updated_set)
                 if missing_pk:
-                    # fallback to full scan path
                     state = TableState(
                         name=name,
                         columns=cols,
@@ -461,8 +397,7 @@ class PytuckyBackend(StorageBackend):
                         state.overlay.inserted[pk] = dict(rec)
                     rebuilt_tables[name] = state
                 else:
-                    previous_state = prev_states.get(name)
-                    assert previous_state is not None
+                    previous_state = prev_states[name]
                     state = TableState(
                         name=previous_state.name,
                         columns=list(previous_state.columns),
@@ -475,42 +410,37 @@ class PytuckyBackend(StorageBackend):
                         index_meta=dict(previous_state.index_meta),
                         overlay=TableOverlay(),
                     )
-                    # Apply explicit dirty PK sets to overlay without materializing entire table
-                    # Inserted: must exist in table.data
                     for pk in inserted_set:
                         inserted_record = table.data.get(pk)
                         if inserted_record is not None:
                             state.overlay.inserted[pk] = dict(inserted_record)
-                    # Updated: records that exist on disk and were updated in memory
                     for pk in updated_set:
                         updated_record = table.data.get(pk)
                         if updated_record is not None:
                             state.overlay.updated[pk] = dict(updated_record)
-                    # Deleted: mark for deletion in overlay
                     for pk in getattr(table, 'deleted', set()):
                         state.overlay.deleted.add(pk)
-                        # ensure removed from pk_index to avoid writing old record
                         if pk in state.pk_index:
                             del state.pk_index[pk]
                     rebuilt_tables[name] = state
-            else:
-                state = TableState(
-                    name=name,
-                    columns=cols,
-                    primary_key=table.primary_key,
-                    next_id=table.next_id,
-                    record_count=0,
-                    data_offset=0,
-                    data_size=0,
-                )
-                for pk, rec in table.scan():
-                    state.overlay.inserted[pk] = dict(rec)
-                rebuilt_tables[name] = state
+                continue
 
-        # assign rebuilt tables and flush
+            state = TableState(
+                name=name,
+                columns=cols,
+                primary_key=table.primary_key,
+                next_id=table.next_id,
+                record_count=0,
+                data_offset=0,
+                data_size=0,
+            )
+            for pk, rec in table.scan():
+                state.overlay.inserted[pk] = dict(rec)
+            rebuilt_tables[name] = state
+
         self.store._tables = rebuilt_tables
         self.store.flush()
-        # invalidate offset map; will be rebuilt lazily if needed
+        self._rebind_lazy_tables(tables)
         self._offset_map = None
 
     @_backend_locked

@@ -59,8 +59,7 @@ from pytucky import (
 
 ## 版本
 
-当前版本：**1.1.2**
-
+- 当前发布版本以 `pytucky.__version__` 与 PyPI 页面为准
 - Python 要求：>= 3.10
 - 运行时依赖：无
 - 数据格式：PTK7（默认 `.pytuck`，显式 `.pytucky` 兼容）

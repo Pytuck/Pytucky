@@ -83,6 +83,96 @@ def test_flush_handles_dirty_update(tmp_path: Path) -> None:
 
 
 @pytest.mark.feature
+def test_flush_dirty_updates_do_not_call_storage_select(tmp_path: Path, monkeypatch) -> None:
+    db = Storage(file_path=tmp_path / "session-dirty-no-readback.pytucky")
+    Base = declarative_base(db)
+
+    class User(Base):
+        __tablename__ = "users"
+        id = Column(int, primary_key=True)
+        name = Column(str)
+
+    session = Session(db)
+    try:
+        session.execute(insert(User).values(name="A"))
+        session.execute(insert(User).values(name="B"))
+        session.commit()
+
+        u1 = session.get(User, 1)
+        u2 = session.get(User, 2)
+        assert u1 is not None and u2 is not None
+
+        def fail_select(table_name, pk):
+            raise AssertionError("dirty flush should not call storage.select()")
+
+        monkeypatch.setattr(db, 'select', fail_select)
+
+        u1.name = "A1"
+        u2.name = "B1"
+        session.flush()
+
+        rows = session.execute(select(User)).all()
+        names = {row.id: row.name for row in rows}
+        assert names == {1: "A1", 2: "B1"}
+    finally:
+        try:
+            session.close()
+        finally:
+            db.close()
+            event.clear()
+
+
+@pytest.mark.feature
+def test_flush_dirty_update_after_event_sees_validated_values(tmp_path: Path) -> None:
+    db = Storage(file_path=tmp_path / "session-dirty-events.pytucky")
+    Base = declarative_base(db)
+
+    class User(Base):
+        __tablename__ = "users"
+        id = Column(int, primary_key=True)
+        age = Column(int)
+
+    session = Session(db)
+    fired = []
+
+    def before_update(user):
+        user.__dict__['age'] = "12"
+        fired.append(("before", type(user.age).__name__, user.age))
+
+    def after_update(user):
+        fired.append(("after", type(user.age).__name__, user.age))
+
+    try:
+        event.listen(User, 'before_update', before_update)
+        event.listen(User, 'after_update', after_update)
+
+        session.execute(insert(User).values(age=1))
+        session.commit()
+
+        user = session.get(User, 1)
+        assert user is not None
+
+        user.age = 2
+        session.flush()
+
+        assert fired == [
+            ("before", "str", "12"),
+            ("after", "int", 12),
+        ]
+        assert user.age == 12
+
+        fresh = session.execute(select(User)).first()
+        assert fresh is not None
+        assert fresh.age == 12
+    finally:
+        try:
+            session.close()
+        finally:
+            db.close()
+            event.clear()
+
+
+@pytest.mark.feature
 def test_merge_new_object(tmp_path: Path) -> None:
     db = Storage(file_path=tmp_path / "session-merge-new.pytucky")
     Base = declarative_base(db)

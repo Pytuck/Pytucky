@@ -25,9 +25,112 @@ jobs:
           cache-suffix: ${{ runner.os }}-${{ matrix.python-version }}
           cache-dependency-glob: |
             pyproject.toml
+            uv.lock
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev
 
-      - name: Run tests
-        run: uv run pytest tests/ -v
+      - name: Run unit and feature tests
+        run: uv run pytest tests/unit tests/feature --ignore=tests/feature/test_mypy_typecheck.py -v
+
+  system:
+    name: System (Python 3.10, ubuntu-latest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv and Python 3.10
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.10"
+          enable-cache: true
+          cache-suffix: ${{ runner.os }}-system
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install dependencies
+        run: uv sync --locked --extra dev
+
+      - name: Run system tests
+        run: uv run pytest tests/system -v
+
+  benchmark:
+    name: Benchmark (Python 3.10, ubuntu-latest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv and Python 3.10
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.10"
+          enable-cache: true
+          cache-suffix: ${{ runner.os }}-benchmark
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install dependencies
+        run: uv sync --locked --extra dev
+
+      - name: Run benchmark tests
+        run: uv run pytest tests/benchmark -v
+
+  quality:
+    name: Quality (Python 3.10, ubuntu-latest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv and Python 3.10
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.10"
+          enable-cache: true
+          cache-suffix: ${{ runner.os }}-quality
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install dependencies
+        run: uv sync --locked --extra dev
+
+      - name: Check lockfile
+        run: uv lock --check
+
+      - name: Run mypy
+        run: uv run python -m mypy pytucky
+
+      - name: Build package
+        run: uv run python -m build
+
+      - name: Check package metadata
+        run: uv run python -m twine check dist/*
+
+      - name: Run wheel smoke test
+        shell: bash
+        run: |
+          tmpdir="$(mktemp -d)"
+          trap 'rm -rf "$tmpdir"' EXIT
+          uv venv "$tmpdir/venv"
+          uv pip install --python "$tmpdir/venv/bin/python" dist/*.whl
+          cd "$tmpdir"
+          "$tmpdir/venv/bin/python" - <<'PY'
+          from importlib.resources import files
+
+          import pytucky
+          from pytucky import Column, Session, Storage, declarative_base, insert, select
+
+          assert hasattr(pytucky, "__version__")
+          assert files("pytucky").joinpath("py.typed").is_file()
+          assert Storage is not None
+          assert Session is not None
+          assert Column is not None
+          assert declarative_base is not None
+          assert insert is not None
+          assert select is not None
+          PY

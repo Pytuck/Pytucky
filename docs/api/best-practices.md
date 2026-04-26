@@ -183,11 +183,33 @@ from pytucky import Storage, declarative_base, Session, Column
 
 ### 主要差异
 
-| 特性 | pytuck | pytucky |
-|------|--------|---------|
-| 引擎 | 8 种（json, csv, sqlite 等） | PTK7 单引擎 |
-| 文件格式 | 多种 | 默认 `.pytuck`（PTK7），显式 `.pytucky` 兼容 |
-| Storage 参数 | engine, backend_options 等 | file_path, in_memory, auto_flush |
-| 迁移工具 | tools.py | 无（单格式无需迁移） |
-| Native SQL | 支持 | 不支持 |
-| 懒加载配置 | lazy_load 参数 | 默认启用，无需配置 |
+| 维度 | pytuck（使用 PTK7 时） | pytucky |
+|------|------------------------|---------|
+| 引擎定位 | 多引擎库，PTK7 只是其中一种后端 | 只维护 PTK7 单引擎 |
+| 文件格式 | PTK7 与 pytucky 兼容，也可使用其他引擎格式 | 默认 `.pytuck`（PTK7），显式 `.pytucky` 兼容 |
+| Storage 使用方式 | PTK7 只是可选后端之一 | 直接围绕 PTK7 使用，无需引擎选择 |
+| 产品边界 | 继续兼顾多引擎、迁移工具和 Native SQL 等能力 | 收敛为 PTK7 单文件路径，不提供多引擎/Native SQL/迁移工具 |
+| 文档与优化重点 | 需要同时兼顾多引擎能力 | 文档、测试、benchmark 与优化都围绕 PTK7 路径 |
+
+### 如果只比较 PTK7，该怎么选
+
+- **继续用 pytuck**：如果你还需要 JSON / CSV / SQLite / Excel 等多引擎能力，或者依赖 Native SQL、迁移工具与相关工作流。
+- **更适合用 pytucky**：如果你只使用 PTK7 单文件数据库，希望接口、文档、测试和后续优化都围绕这一条路径，减少多引擎心智负担。
+- **迁移成本**：如果你已经在 pytuck 中稳定使用 PTK7，切到 pytucky 通常只需要更改 import；现有 PTK7 文件可继续使用。
+
+### 最小迁移步骤
+
+- 把 `from pytuck ...` 改为 `from pytucky ...`
+- 保持原有 PTK7 文件即可继续使用，无需数据迁移
+- 若原项目显式传入 `.pytucky` 后缀，可继续保留；新项目默认推荐 `.pytuck`
+
+### 加密兼容说明
+
+Pytucky 与 pytuck 共享 PTK7 格式，以下加密等级已验证可双向互读互写：
+
+- `None`
+- `low`
+- `medium`
+- `high`
+
+使用加密文件时，双方需要保持相同密码；只要密码正确，便可以在两个库之间继续 reopen、查询和 flush。

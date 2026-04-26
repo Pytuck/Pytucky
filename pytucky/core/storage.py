@@ -10,7 +10,7 @@ import copy
 from functools import wraps
 from pathlib import Path
 from threading import RLock
-from typing import Any, Callable, Concatenate, Generator, Iterator, ParamSpec, TYPE_CHECKING, Sequence, TypeVar
+from typing import Any, Callable, Concatenate, Generator, Iterator, MutableMapping, ParamSpec, TYPE_CHECKING, Sequence, TypeVar, cast
 from contextlib import contextmanager
 
 from ..common.options import PytuckBackendOptions, SyncOptions, SyncResult
@@ -30,6 +30,7 @@ from ..common.exceptions import (
 
 if TYPE_CHECKING:
     from ..backends.base import StorageBackend
+    from ..backends.store import Store
     from .orm import PureBaseModel
 
 P = ParamSpec("P")
@@ -45,6 +46,31 @@ def _storage_locked(
             return method(self, *args, **kwargs)
 
     return wrapper
+
+
+class _PkOffsetView(MutableMapping[Any, int]):
+    def __init__(self, pk_index: dict[Any, tuple[int, int]]) -> None:
+        self._pk_index = pk_index
+
+    def __getitem__(self, key: Any) -> int:
+        return self._pk_index[key][0]
+
+    def __setitem__(self, key: Any, value: int) -> None:
+        if key in self._pk_index:
+            _, length = self._pk_index[key]
+            self._pk_index[key] = (value, length)
+        else:
+            self._pk_index[key] = (value, 0)
+
+    def __delitem__(self, key: Any) -> None:
+        del self._pk_index[key]
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self._pk_index)
+
+    def __len__(self) -> int:
+        return len(self._pk_index)
+
 
 class TransactionSnapshot:
     """
@@ -148,7 +174,7 @@ class Table:
         self._schema_dirty: bool = False  # 结构是否被修改（add_column/drop_column 等）
 
         # 懒加载支持
-        self._pk_offsets: dict[Any, int] | None = None  # {pk: file_offset}
+        self._pk_offsets: MutableMapping[Any, int] | None = None  # {pk: file_offset}
         self._data_file: Path | None = None  # 数据文件路径
         self._backend: StorageBackend | None = None  # PTK7 后端引用（用于读取记录）
         self._lazy_loaded: bool = False  # 是否为懒加载模式
@@ -565,7 +591,8 @@ class Table:
         """
         从文件读取单条记录（懒加载模式）
 
-        委托给 backend.read_lazy_record()，支持加密和非加密文件
+        已知表名与主键时，优先直达底层 store.select_raw()，减少 backend adapter
+        与额外包装层；若后端不暴露 store，则回退到通用 backend.read_lazy_record()。
 
         Args:
             pk: 主键值
@@ -585,12 +612,19 @@ class Table:
         if pk not in self._pk_offsets:
             raise RecordNotFoundError(self.name, pk)
 
-        offset: int = self._pk_offsets[pk]  # type: ignore
+        store = cast("Store | None", getattr(self._backend, 'store', None))
+        if store is not None:
+            return store.select_raw(self.name, pk)
 
-        record = self._backend.read_lazy_record(
-            self._data_file, offset, self.columns, pk, table_name=self.name
+        offset: int = self._pk_offsets[pk]  # type: ignore
+        return self._backend.read_lazy_record(
+            self._data_file,
+            offset,
+            self.columns,
+            pk,
+            table_name=self.name,
+            copy_result=False,
         )
-        return record
 
     def has_pk(self, pk: Any) -> bool:
         """判断主键是否存在（包含懒加载未入内存的记录）"""
@@ -1621,13 +1655,19 @@ class Storage:
         Returns:
             记录字典
         """
-        table = self.get_table(table_name)
+        table = self.tables.get(table_name)
+        if table is None:
+            raise TableNotFoundError(table_name)
+
+        store = cast("Store | None", getattr(table._backend, 'store', None)) if table._backend is not None else None
+        if table.primary_key and table._lazy_loaded and store is not None:
+            return store.select(table_name, pk)
 
         record = table.get(pk)
         record_copy = record.copy()
         # 无主键表：注入内部 rowid
         if not table.primary_key:
-            record_copy[PSEUDO_PK_NAME] = pk
+            record_copy[PSEUDO_PK_NAME] = table._normalize_pk(pk)
         return record_copy
 
     @_storage_locked
@@ -1647,6 +1687,254 @@ class Storage:
         table = self.get_table(table_name)
 
         return table.record_count
+
+    def _build_query_plan(
+        self,
+        table_name: str,
+        conditions: Sequence[ConditionType],
+    ) -> tuple[Table, set[Any], list[Condition], list[CompositeCondition]]:
+        table = self.get_table(table_name)
+
+        simple_conditions: list[Condition] = []
+        composite_conditions: list[CompositeCondition] = []
+        for condition in conditions:
+            if isinstance(condition, CompositeCondition):
+                composite_conditions.append(condition)
+            else:
+                simple_conditions.append(condition)
+
+        candidate_pks: set[Any] | None = None
+        remaining_simple_conditions: list[Condition] = []
+
+        for condition in simple_conditions:
+            if condition.operator == '=' and condition.field in table.indexes:
+                index = table.indexes[condition.field]
+                pks = index.lookup(condition.value)
+                candidate_pks = pks if candidate_pks is None else candidate_pks.intersection(pks)
+            elif (
+                condition.operator in ('>', '>=', '<', '<=')
+                and condition.field in table.indexes
+                and table.indexes[condition.field].supports_range_query()
+            ):
+                sorted_idx = table.indexes[condition.field]
+                min_val, max_val = None, None
+                include_min, include_max = True, True
+
+                if condition.operator == '>':
+                    min_val, include_min = condition.value, False
+                elif condition.operator == '>=':
+                    min_val, include_min = condition.value, True
+                elif condition.operator == '<':
+                    max_val, include_max = condition.value, False
+                elif condition.operator == '<=':
+                    max_val, include_max = condition.value, True
+
+                pks = sorted_idx.range_query(min_val, max_val, include_min, include_max)
+                candidate_pks = pks if candidate_pks is None else candidate_pks.intersection(pks)
+            else:
+                remaining_simple_conditions.append(condition)
+
+        if candidate_pks is None:
+            candidate_pks = set(table.all_pks())
+            remaining_simple_conditions = simple_conditions
+
+        return table, candidate_pks, remaining_simple_conditions, composite_conditions
+
+    @staticmethod
+    def _record_matches(
+        record: dict[str, Any],
+        simple_conditions: Sequence[Condition],
+        composite_conditions: Sequence[CompositeCondition],
+    ) -> bool:
+        if not all(cond.evaluate(record) for cond in simple_conditions):
+            return False
+        return all(cond.evaluate(record) for cond in composite_conditions)
+
+    @staticmethod
+    def _build_result_record(table: Table, pk: Any, record: dict[str, Any]) -> dict[str, Any]:
+        record_copy = record.copy()
+        if not table.primary_key:
+            record_copy[PSEUDO_PK_NAME] = pk
+        return record_copy
+
+    @staticmethod
+    def _apply_query_pagination(
+        records: list[dict[str, Any]],
+        limit: int | None,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        if offset != 0:
+            records = records[offset:]
+        if limit is not None:
+            records = records[:limit]
+        return records
+
+    @_storage_locked
+    def _query_count(
+        self,
+        table_name: str,
+        conditions: Sequence[ConditionType],
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> int:
+        table, candidate_pks, remaining_simple_conditions, composite_conditions = self._build_query_plan(
+            table_name,
+            conditions,
+        )
+
+        matched_count = 0
+        for pk in candidate_pks:
+            try:
+                record = table.get(pk)
+            except RecordNotFoundError:
+                continue
+            if self._record_matches(record, remaining_simple_conditions, composite_conditions):
+                matched_count += 1
+
+        if offset > 0:
+            matched_count = max(0, matched_count - offset)
+        if limit is not None:
+            matched_count = min(matched_count, max(limit, 0))
+        return matched_count
+
+    @_storage_locked
+    def _query_window(
+        self,
+        table_name: str,
+        conditions: Sequence[ConditionType],
+        *,
+        limit: int | None,
+        offset: int,
+        order_by: str | None,
+        order_desc: bool,
+    ) -> tuple[list[dict[str, Any]], int, bool]:
+        table, candidate_pks, remaining_simple_conditions, composite_conditions = self._build_query_plan(
+            table_name,
+            conditions,
+        )
+        can_stream_window = offset >= 0 and (limit is None or limit >= 0)
+        use_index_order = (
+            order_by
+            and order_by in table.indexes
+            and table.indexes[order_by].supports_range_query()
+        )
+
+        if use_index_order:
+            assert order_by is not None
+            sorted_idx = table.indexes[order_by]
+            assert isinstance(sorted_idx, SortedIndex)
+            ordered_pks = sorted_idx.get_sorted_pks(reverse=order_desc)
+            indexed_pk_set = set(ordered_pks)
+            none_value_pks = [pk for pk in candidate_pks if pk not in indexed_pk_set]
+
+            none_results: list[dict[str, Any]] = []
+            for pk in none_value_pks:
+                try:
+                    record = table.get(pk)
+                except RecordNotFoundError:
+                    continue
+                if not self._record_matches(record, remaining_simple_conditions, composite_conditions):
+                    continue
+                none_results.append(self._build_result_record(table, pk, record))
+
+            def iter_sorted_results() -> Iterator[dict[str, Any]]:
+                if order_desc:
+                    for rec in none_results:
+                        yield rec
+                for pk in ordered_pks:
+                    if pk not in candidate_pks:
+                        continue
+                    try:
+                        record = table.get(pk)
+                    except RecordNotFoundError:
+                        continue
+                    if not self._record_matches(record, remaining_simple_conditions, composite_conditions):
+                        continue
+                    yield self._build_result_record(table, pk, record)
+                if not order_desc:
+                    for rec in none_results:
+                        yield rec
+
+            if not can_stream_window:
+                matched_records = list(iter_sorted_results())
+                total_count = len(matched_records)
+                records = self._apply_query_pagination(matched_records, limit, offset)
+                has_more = limit is not None and limit >= 0 and offset >= 0 and (offset + len(records)) < total_count
+                return records, total_count, has_more
+
+            records = []
+            total_count = 0
+            for rec in iter_sorted_results():
+                total_count += 1
+                if total_count <= offset:
+                    continue
+                if limit is None or len(records) < limit:
+                    records.append(rec)
+            has_more = limit is not None and (offset + len(records)) < total_count
+            return records, total_count, has_more
+
+        if order_by and order_by in table.columns:
+            matched_records = []
+            for pk in candidate_pks:
+                try:
+                    record = table.get(pk)
+                except RecordNotFoundError:
+                    continue
+                if not self._record_matches(record, remaining_simple_conditions, composite_conditions):
+                    continue
+                matched_records.append(self._build_result_record(table, pk, record))
+
+            def sort_key(_record: dict[str, Any]) -> tuple[Any, Any]:
+                value = _record.get(order_by)
+                if value is None:
+                    return (1, 0)
+                return (0, value)
+
+            try:
+                matched_records.sort(key=sort_key, reverse=order_desc)
+            except TypeError:
+                matched_records.sort(key=lambda r: str(r.get(order_by, '')), reverse=order_desc)
+
+            total_count = len(matched_records)
+            records = self._apply_query_pagination(matched_records, limit, offset)
+            has_more = limit is not None and limit >= 0 and offset >= 0 and (offset + len(records)) < total_count
+            return records, total_count, has_more
+
+        if not can_stream_window:
+            matched_records = []
+            for pk in candidate_pks:
+                try:
+                    record = table.get(pk)
+                except RecordNotFoundError:
+                    continue
+                if not self._record_matches(record, remaining_simple_conditions, composite_conditions):
+                    continue
+                matched_records.append(self._build_result_record(table, pk, record))
+
+            total_count = len(matched_records)
+            records = self._apply_query_pagination(matched_records, limit, offset)
+            has_more = limit is not None and limit >= 0 and offset >= 0 and (offset + len(records)) < total_count
+            return records, total_count, has_more
+
+        records = []
+        total_count = 0
+        for pk in candidate_pks:
+            try:
+                record = table.get(pk)
+            except RecordNotFoundError:
+                continue
+            if not self._record_matches(record, remaining_simple_conditions, composite_conditions):
+                continue
+
+            total_count += 1
+            if total_count <= offset:
+                continue
+            if limit is None or len(records) < limit:
+                records.append(self._build_result_record(table, pk, record))
+
+        has_more = limit is not None and (offset + len(records)) < total_count
+        return records, total_count, has_more
 
     @_storage_locked
     def query(self,
@@ -1670,196 +1958,147 @@ class Storage:
         Returns:
             记录字典列表
         """
+        if limit == 0:
+            return []
+
         table = self.get_table(table_name)
-
-        # 分离简单条件和复合条件
-        simple_conditions: list[Condition] = []
-        composite_conditions: list[CompositeCondition] = []
-
-        for condition in conditions:
-            if isinstance(condition, CompositeCondition):
-                composite_conditions.append(condition)
-            else:
-                simple_conditions.append(condition)
-
-        # 优化：使用多索引联合查询（取所有匹配索引结果的交集）
-        # 仅对简单条件使用索引优化
-        candidate_pks = None
-        remaining_simple_conditions: list[Condition] = []
-
-        for condition in simple_conditions:
+        if (
+            order_by is None
+            and offset >= 0
+            and (limit is None or limit > 0)
+            and len(conditions) == 1
+            and not isinstance(conditions[0], CompositeCondition)
+        ):
+            condition = conditions[0]
             if condition.operator == '=' and condition.field in table.indexes:
-                # 使用索引查询（等值）
-                index = table.indexes[condition.field]
-                pks = index.lookup(condition.value)
+                results = []
+                skipped = 0
+                for pk in table.indexes[condition.field].lookup(condition.value):
+                    try:
+                        record = table.get(pk)
+                    except RecordNotFoundError:
+                        continue
+                    if skipped < offset:
+                        skipped += 1
+                        continue
+                    results.append(self._build_result_record(table, pk, record))
+                    if limit is not None and len(results) >= limit:
+                        break
+                return results
 
-                if candidate_pks is None:
-                    candidate_pks = pks
-                else:
-                    # 取交集，缩小候选集
-                    candidate_pks = candidate_pks.intersection(pks)
-            elif (condition.operator in ('>', '>=', '<', '<=')
-                  and condition.field in table.indexes
-                  and table.indexes[condition.field].supports_range_query()):
-                # 使用有序索引范围查询
-                sorted_idx = table.indexes[condition.field]
-                min_val, max_val = None, None
-                include_min, include_max = True, True
-
-                if condition.operator == '>':
-                    min_val, include_min = condition.value, False
-                elif condition.operator == '>=':
-                    min_val, include_min = condition.value, True
-                elif condition.operator == '<':
-                    max_val, include_max = condition.value, False
-                elif condition.operator == '<=':
-                    max_val, include_max = condition.value, True
-
-                pks = sorted_idx.range_query(min_val, max_val, include_min, include_max)
-
-                if candidate_pks is None:
-                    candidate_pks = pks
-                else:
-                    candidate_pks = candidate_pks.intersection(pks)
-            else:
-                # 无索引的条件保留后续过滤
-                remaining_simple_conditions.append(condition)
-
-        # 如果没有使用索引，全表扫描
-        if candidate_pks is None:
-            candidate_pks = set(table.all_pks())
-            remaining_simple_conditions = simple_conditions
-
-        # 检查是否可以使用索引排序
+        table, candidate_pks, remaining_simple_conditions, composite_conditions = self._build_query_plan(
+            table_name,
+            conditions,
+        )
         use_index_order = (
             order_by
             and order_by in table.indexes
             and table.indexes[order_by].supports_range_query()
         )
+        can_stream_paging = offset >= 0 and (limit is None or limit > 0)
 
         if use_index_order:
-            # 使用有序索引排序：按索引顺序遍历，同时过滤 + 分页，可提前停止
-            assert order_by is not None  # use_index_order 为 True 时 order_by 必定非 None
+            assert order_by is not None
             sorted_idx = table.indexes[order_by]
             assert isinstance(sorted_idx, SortedIndex)
             ordered_pks = sorted_idx.get_sorted_pks(reverse=order_desc)
-
-            # 索引中不包含 None 值的记录，需要额外处理
-            # 收集 None 值记录的 pk（不在索引中的候选记录）
             indexed_pk_set = set(ordered_pks)
             none_value_pks = [pk for pk in candidate_pks if pk not in indexed_pk_set]
 
-            # 过滤 None 值记录
             none_results: list[dict[str, Any]] = []
-            if none_value_pks:
-                for pk in none_value_pks:
-                    try:
-                        record = table.get(pk)
-                    except RecordNotFoundError:
-                        continue
-                    if not all(cond.evaluate(record) for cond in remaining_simple_conditions):
-                        continue
-                    if not all(cond.evaluate(record) for cond in composite_conditions):
-                        continue
-                    record_copy = record.copy()
-                    if not table.primary_key:
-                        record_copy[PSEUDO_PK_NAME] = pk
-                    none_results.append(record_copy)
-
-            results: list[dict[str, Any]] = []
-            skipped = 0
-
-            def _append_with_paging(rec: dict[str, Any]) -> bool:
-                """追加记录并处理分页，返回是否已达到 limit"""
-                nonlocal skipped
-                if offset > 0 and skipped < offset:
-                    skipped += 1
-                    return False
-                results.append(rec)
-                return limit is not None and len(results) >= limit
-
-            if order_desc:
-                # 降序：None 排在最前
-                for rec in none_results:
-                    if _append_with_paging(rec):
-                        return results
-            # 有值记录按索引排序
-            for pk in ordered_pks:
-                if pk not in candidate_pks:
-                    continue
+            for pk in none_value_pks:
                 try:
                     record = table.get(pk)
                 except RecordNotFoundError:
                     continue
-                if not all(cond.evaluate(record) for cond in remaining_simple_conditions):
+                if not self._record_matches(record, remaining_simple_conditions, composite_conditions):
                     continue
-                if not all(cond.evaluate(record) for cond in composite_conditions):
+                none_results.append(self._build_result_record(table, pk, record))
+
+            def iter_sorted_results() -> Iterator[dict[str, Any]]:
+                if order_desc:
+                    for rec in none_results:
+                        yield rec
+                for pk in ordered_pks:
+                    if pk not in candidate_pks:
+                        continue
+                    try:
+                        record = table.get(pk)
+                    except RecordNotFoundError:
+                        continue
+                    if not self._record_matches(record, remaining_simple_conditions, composite_conditions):
+                        continue
+                    yield self._build_result_record(table, pk, record)
+                if not order_desc:
+                    for rec in none_results:
+                        yield rec
+
+            if not can_stream_paging:
+                return self._apply_query_pagination(list(iter_sorted_results()), limit, offset)
+
+            results = []
+            skipped = 0
+            for rec in iter_sorted_results():
+                if skipped < offset:
+                    skipped += 1
                     continue
-
-                record_copy = record.copy()
-                if not table.primary_key:
-                    record_copy[PSEUDO_PK_NAME] = pk
-
-                if _append_with_paging(record_copy):
-                    return results
-
-            if not order_desc:
-                # 升序：None 排在最后
-                for rec in none_results:
-                    if _append_with_paging(rec):
-                        return results
-
+                results.append(rec)
+                if limit is not None and len(results) >= limit:
+                    break
             return results
-        else:
-            # 常规路径：遍历 candidate_pks → 过滤 → 排序 → 分页
+
+        if order_by and order_by in table.columns:
             results = []
             for pk in candidate_pks:
                 try:
                     record = table.get(pk)
                 except RecordNotFoundError:
                     continue
-                # 评估简单条件
-                if not all(cond.evaluate(record) for cond in remaining_simple_conditions):
+                if not self._record_matches(record, remaining_simple_conditions, composite_conditions):
                     continue
-                # 评估复合条件（OR/AND/NOT）
-                if not all(cond.evaluate(record) for cond in composite_conditions):
-                    continue
+                results.append(self._build_result_record(table, pk, record))
 
-                record_copy = record.copy()
-                # 无主键表：注入内部 rowid
-                if not table.primary_key:
-                    record_copy[PSEUDO_PK_NAME] = pk
-                results.append(record_copy)
+            def sort_key(_record: dict[str, Any]) -> tuple[Any, Any]:
+                value = _record.get(order_by)
+                if value is None:
+                    return (1, 0)
+                return (0, value)
 
-            # 排序
-            if order_by and order_by in table.columns:
-                def sort_key(_record: dict[str, Any]) -> tuple:
-                    """
-                    排序键函数
+            try:
+                results.sort(key=sort_key, reverse=order_desc)
+            except TypeError:
+                results.sort(key=lambda r: str(r.get(order_by, '')), reverse=order_desc)
 
-                    排序规则：
-                    - None 值始终排在最后（升序末尾，降序开头）
-                    - 使用元组 (优先级, 值) 实现：优先级 0 表示有值，1 表示 None
-                    - 方向由 sort(reverse=order_desc) 控制
-                    """
-                    value = _record.get(order_by)
-                    if value is None:
-                        return (1, 0)
-                    return (0, value)
+            return self._apply_query_pagination(results, limit, offset)
 
+        if not can_stream_paging:
+            results = []
+            for pk in candidate_pks:
                 try:
-                    results.sort(key=sort_key, reverse=order_desc)
-                except TypeError:
-                    # 如果比较失败（比如混合类型），按字符串排序
-                    results.sort(key=lambda r: str(r.get(order_by, '')), reverse=order_desc)
+                    record = table.get(pk)
+                except RecordNotFoundError:
+                    continue
+                if not self._record_matches(record, remaining_simple_conditions, composite_conditions):
+                    continue
+                results.append(self._build_result_record(table, pk, record))
+            return self._apply_query_pagination(results, limit, offset)
 
-            # 分页
-            if offset > 0:
-                results = results[offset:]
-            if limit is not None and limit > 0:
-                results = results[:limit]
-
-            return results
+        results = []
+        skipped = 0
+        for pk in candidate_pks:
+            try:
+                record = table.get(pk)
+            except RecordNotFoundError:
+                continue
+            if not self._record_matches(record, remaining_simple_conditions, composite_conditions):
+                continue
+            if skipped < offset:
+                skipped += 1
+                continue
+            results.append(self._build_result_record(table, pk, record))
+            if limit is not None and len(results) >= limit:
+                break
+        return results
 
     @_storage_locked
     def query_table_data(self,
@@ -1898,16 +2137,13 @@ class Storage:
 
         table = self.get_table(table_name)
 
-        # 统一解析 filters 为 backend_conditions 列表
         backend_conditions: list[dict[str, Any]] = []
         if filters:
             if isinstance(filters, dict):
-                # 旧格式：{field: value} → 等值过滤
                 for field, value in filters.items():
                     if field in table.columns:
                         backend_conditions.append({'field': field, 'operator': '=', 'value': value})
             elif isinstance(filters, list):
-                # 新格式：[{'field': str, 'operator': str, 'value': Any}, ...]
                 for f in filters:
                     if f.get('field') in table.columns:
                         backend_conditions.append({
@@ -1916,11 +2152,8 @@ class Storage:
                             'value': f['value']
                         })
 
-        # 尝试使用后端分页（仅在当前内存状态干净时）
         if self.backend and not self._dirty and self.backend.supports_server_side_pagination():
-
             try:
-                # 使用后端分页
                 result = self.backend.query_with_pagination(
                     table_name=table_name,
                     conditions=backend_conditions,
@@ -1930,9 +2163,7 @@ class Storage:
                     order_desc=order_desc
                 )
 
-                # 获取表结构信息
                 schema = [col.to_dict() for col in table.columns.values()]
-
                 return {
                     'records': result.get('records', []),
                     'total_count': result.get('total_count', 0),
@@ -1940,37 +2171,22 @@ class Storage:
                     'schema': schema
                 }
             except NotImplementedError:
-                # 后端不支持，回退到内存分页
                 pass
 
-        # 使用内存分页（默认方式）
-        # 构建查询条件
         conditions: list[Condition] = []
         for bc in backend_conditions:
             conditions.append(Condition(bc['field'], bc['operator'], bc['value']))
 
-        # 先查询总数（不分页）
-        total_records = self.query(table_name, conditions)
-        total_count = len(total_records)
-
-        # 再进行分页查询
-        records = self.query(
+        records, total_count, has_more = self._query_window(
             table_name=table_name,
             conditions=conditions,
             limit=limit,
             offset=offset,
             order_by=order_by,
-            order_desc=order_desc
+            order_desc=order_desc,
         )
 
-        # 获取表结构信息
         schema = [col.to_dict() for col in table.columns.values()]
-
-        # 判断是否还有更多数据
-        has_more = False
-        if limit is not None:
-            has_more = (offset + len(records)) < total_count
-
         return {
             'records': records,
             'total_count': total_count,

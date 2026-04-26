@@ -57,7 +57,16 @@ class StorageBackend(ABC):
     def populate_tables_with_data(self, tables: dict[str, 'Table']) -> None:
         pass
 
-    def read_lazy_record(self, file_path: Path, offset: int, columns: dict[str, Any], pk: Any, *, table_name: str | None = None) -> dict[str, Any]:
+    def read_lazy_record(
+        self,
+        file_path: Path,
+        offset: int,
+        columns: dict[str, Any],
+        pk: Any,
+        *,
+        table_name: str | None = None,
+        copy_result: bool = True,
+    ) -> dict[str, Any]:
         raise NotImplementedError
 
     def supports_server_side_pagination(self) -> bool:
