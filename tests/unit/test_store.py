@@ -188,6 +188,78 @@ def test_flush_reuses_in_memory_state_without_reopen(tmp_path: Path, monkeypatch
     assert store.select("users", 1)["name"] == "Alice"
 
 
+def test_flush_fsyncs_file_and_removes_temporary_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_path = tmp_path / "durable.pytuck"
+    store = build_store(file_path)
+    store.insert("users", {"name": "Alice", "age": 18})
+    fsync_calls: list[int] = []
+    original_fsync = store_module.os.fsync
+
+    def recording_fsync(fd: int) -> None:
+        fsync_calls.append(fd)
+        original_fsync(fd)
+
+    monkeypatch.setattr(store_module.os, "fsync", recording_fsync)
+    store.flush()
+
+    assert fsync_calls
+    assert not file_path.with_suffix(".pytuck.tmp").exists()
+    assert Store(file_path).select("users", 1)["name"] == "Alice"
+
+
+def test_flush_fsync_failure_preserves_existing_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_path = tmp_path / "fsync-failure.pytuck"
+    store = build_store(file_path)
+    store.insert("users", {"name": "Alice", "age": 18})
+    store.flush()
+    original_bytes = file_path.read_bytes()
+    store.update("users", 1, {"name": "Bob"})
+
+    def failing_fsync(fd: int) -> None:
+        raise OSError("模拟文件同步失败")
+
+    monkeypatch.setattr(store_module.os, "fsync", failing_fsync)
+    with pytest.raises(OSError, match="模拟文件同步失败"):
+        store.flush()
+
+    assert file_path.read_bytes() == original_bytes
+    assert not file_path.with_suffix(".pytuck.tmp").exists()
+    assert Store(file_path).select("users", 1)["name"] == "Alice"
+
+
+def test_flush_replace_failure_preserves_existing_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_path = tmp_path / "replace-failure.pytuck"
+    store = build_store(file_path)
+    store.insert("users", {"name": "Alice", "age": 18})
+    store.flush()
+    original_bytes = file_path.read_bytes()
+    store.update("users", 1, {"name": "Bob"})
+    path_type = type(file_path)
+    original_replace = path_type.replace
+
+    def failing_replace(self: Path, target: Path) -> Path:
+        if self == file_path.with_suffix(".pytuck.tmp"):
+            raise OSError("模拟文件替换失败")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(path_type, "replace", failing_replace)
+    with pytest.raises(OSError, match="模拟文件替换失败"):
+        store.flush()
+
+    assert file_path.read_bytes() == original_bytes
+    assert not file_path.with_suffix(".pytuck.tmp").exists()
+    assert Store(file_path).select("users", 1)["name"] == "Alice"
+
+
 def test_flush_materializes_live_records_once_per_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     file_path = tmp_path / "flush-materialize-once.pytucky"
     store = build_store(file_path)
