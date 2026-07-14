@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import errno
 from functools import wraps
 import os
 from pathlib import Path
@@ -57,26 +56,6 @@ def _store_locked(
     return wrapper
 
 
-def _sync_parent_directory(file_path: Path) -> None:
-    """尽力同步父目录，确保文件替换记录落盘。"""
-    if os.name != "posix":
-        return
-
-    flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    directory_fd = os.open(file_path.parent, flags)
-    try:
-        try:
-            os.fsync(directory_fd)
-        except OSError as exc:
-            unsupported_errors = {errno.EINVAL, errno.ENOTSUP, errno.EROFS}
-            if exc.errno not in unsupported_errors:
-                raise
-    finally:
-        os.close(directory_fd)
-
-
 def _atomic_write(file_path: Path, chunks: tuple[bytes, ...]) -> None:
     """将完整数据库写入临时文件并原子替换目标文件。"""
     temp_path = file_path.with_suffix(file_path.suffix + ".tmp")
@@ -84,10 +63,7 @@ def _atomic_write(file_path: Path, chunks: tuple[bytes, ...]) -> None:
         with temp_path.open("wb") as file_obj:
             for chunk in chunks:
                 file_obj.write(chunk)
-            file_obj.flush()
-            os.fsync(file_obj.fileno())
         temp_path.replace(file_path)
-        _sync_parent_directory(file_path)
     except BaseException:
         temp_path.unlink(missing_ok=True)
         raise
