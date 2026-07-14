@@ -12,9 +12,11 @@ class PytuckBackendOptions:
     承载 PTK7 读写所需的加密配置。
     - encryption: 可选的级别标识，允许 'low'|'medium'|'high' 或 None
     - password: 可选的原始密码字符串，用于派生密钥（空表示未配置）
+    - require_authentication: 是否拒绝没有 Pytucky HMAC 标签的旧版/第三方 PTK7 文件
     """
     encryption: Literal["low", "medium", "high"] | None = None
     password: str | None = None
+    require_authentication: bool = False
 
 # ========== Schema 同步选项 ==========
 

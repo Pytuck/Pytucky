@@ -170,9 +170,8 @@ class Session:
                     data: dict[str, Any] = {}
                     for attr_name, column in instance.__columns__.items():
                         value = getattr(instance, attr_name, None)
-                        if value is not None:
-                            db_col_name = column.name if column.name else attr_name
-                            data[db_col_name] = value
+                        db_col_name = column.name if column.name else attr_name
+                        data[db_col_name] = value
                     records.append(data)
 
                 # 批量插入（Table.bulk_insert 批量分配 PK + 批量验证 + 批量索引更新）
@@ -230,9 +229,8 @@ class Session:
                     update_data: dict[str, Any] = {}
                     for attr_name, column in model_class.__columns__.items():
                         value = getattr(instance, attr_name, None)
-                        if value is not None:
-                            db_col_name = column.name if column.name else attr_name
-                            update_data[db_col_name] = value
+                        db_col_name = column.name if column.name else attr_name
+                        update_data[db_col_name] = value
                     updates.append((pk, update_data))
 
                 # 批量更新数据库

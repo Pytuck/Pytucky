@@ -83,6 +83,32 @@ def test_flush_handles_dirty_update(tmp_path: Path) -> None:
 
 
 @pytest.mark.feature
+def test_flush_persists_nullable_field_set_to_none(tmp_path: Path) -> None:
+    db = Storage(file_path=tmp_path / "session-nullable-update.pytuck")
+    Base = declarative_base(db)
+
+    class User(Base):
+        __tablename__ = "users"
+        id = Column(int, primary_key=True)
+        age = Column(int, nullable=True)
+
+    session = Session(db)
+    try:
+        session.execute(insert(User).values(age=5))
+        user = session.get(User, 1)
+        assert user is not None
+
+        user.age = None
+        session.flush()
+
+        assert db.select("users", 1)["age"] is None
+    finally:
+        session.close()
+        db.close()
+        event.clear()
+
+
+@pytest.mark.feature
 def test_flush_dirty_updates_do_not_call_storage_select(tmp_path: Path, monkeypatch) -> None:
     db = Storage(file_path=tmp_path / "session-dirty-no-readback.pytucky")
     Base = declarative_base(db)

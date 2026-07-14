@@ -213,3 +213,13 @@ Pytucky 与 pytuck 共享 PTK7 格式，以下加密等级已验证可双向互�
 - `high`
 
 使用加密文件时，双方需要保持相同密码；只要密码正确，便可以在两个库之间继续 reopen、查询和 flush。
+
+Pytucky 新写出的加密文件额外带有文件级 HMAC 认证标签，能够检测密文及文件元数据被篡改。
+pytuck 当前会忽略并在重写时移除该标签，因此跨库重写后的文件属于“兼容但未认证”文件。
+默认模式会继续读取这类文件；如果应用必须拒绝旧版、降级或第三方未认证文件，请在 reopen 时传入：
+
+```python
+PytuckBackendOptions(password="secret123", require_authentication=True)
+```
+
+`high` 使用 ChaCha20 提供机密性；只有同时验证 HMAC 标签时，才具备完整性保证。

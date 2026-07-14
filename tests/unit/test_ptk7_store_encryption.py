@@ -6,6 +6,7 @@ import pytest
 
 from pytucky import Column
 from pytucky.backends.store import Store
+from pytucky.backends.format import FileHeader, HEADER_STRUCT
 from pytucky.common.exceptions import ConfigurationError, EncryptionError
 from pytucky.common.options import PytuckBackendOptions
 
@@ -42,6 +43,9 @@ def test_store_roundtrip_with_supported_encryption_modes(
         assert _SECRET_VALUE.encode("utf-8") in raw_bytes
     else:
         assert _SECRET_VALUE.encode("utf-8") not in raw_bytes
+        header = FileHeader.unpack(raw_bytes[:HEADER_STRUCT.size])
+        assert header.has_authentication()
+        assert header.checksum != 0
 
     reopen_options = PytuckBackendOptions(password=password) if encryption else PytuckBackendOptions()
     reopened = Store(file_path, options=reopen_options)
@@ -96,4 +100,71 @@ def test_store_rejects_invalid_encryption_level_before_writing(tmp_path: Path) -
     store.create_table("users", [Column(int, name="id", primary_key=True), Column(str, name="name")])
     store.insert("users", {"name": "Alice"})
     with pytest.raises(ConfigurationError, match="无效的加密等级"):
+        store.flush()
+
+
+def test_store_rejects_tampered_authenticated_payload(tmp_path: Path) -> None:
+    file_path = tmp_path / "tampered-high.pytuck"
+    options = PytuckBackendOptions(encryption="high", password="secret123")
+    writer = Store(file_path, options=options, open_existing=False)
+    writer.create_table(
+        "items",
+        [
+            Column(int, name="id", primary_key=True),
+            Column(int, name="value", nullable=False),
+        ],
+    )
+    writer.insert("items", {"value": 1})
+    writer.flush()
+    offset, _length = writer.table_state("items").pk_index[1]
+    writer.close()
+
+    with file_path.open("r+b") as handle:
+        handle.seek(offset + 8)
+        original = handle.read(1)
+        handle.seek(offset + 8)
+        handle.write(bytes([original[0] ^ 0x01]))
+
+    with pytest.raises(EncryptionError, match="完整性认证失败"):
+        Store(file_path, options=PytuckBackendOptions(password="secret123"))
+
+
+def test_store_strict_authentication_rejects_legacy_or_downgraded_file(tmp_path: Path) -> None:
+    file_path = tmp_path / "downgraded-high.pytuck"
+    writer = Store(
+        file_path,
+        options=PytuckBackendOptions(encryption="high", password="secret123"),
+        open_existing=False,
+    )
+    writer.create_table("items", [Column(int, name="id", primary_key=True)])
+    writer.insert("items", {})
+    writer.flush()
+    writer.close()
+
+    raw = file_path.read_bytes()
+    header = FileHeader.unpack(raw[:HEADER_STRUCT.size])
+    legacy_header = header.set_authentication(False).with_checksum(0)
+    file_path.write_bytes(legacy_header.pack() + raw[HEADER_STRUCT.size:])
+
+    compatible = Store(file_path, options=PytuckBackendOptions(password="secret123"))
+    compatible.close()
+
+    with pytest.raises(EncryptionError, match="未包含 Pytucky HMAC"):
+        Store(
+            file_path,
+            options=PytuckBackendOptions(
+                password="secret123",
+                require_authentication=True,
+            ),
+        )
+
+
+def test_store_strict_authentication_requires_encryption(tmp_path: Path) -> None:
+    store = Store(
+        tmp_path / "strict-plain.pytuck",
+        options=PytuckBackendOptions(require_authentication=True),
+        open_existing=False,
+    )
+    store.create_table("items", [Column(int, name="id", primary_key=True)])
+    with pytest.raises(ConfigurationError, match="要求启用 PTK7 加密"):
         store.flush()

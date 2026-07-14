@@ -33,3 +33,14 @@ def test_fileheader_encryption_flags_roundtrip():
     h_none = h_high.set_encryption(None)
     assert not h_none.is_encrypted()
     assert h_none.get_encryption_level() is None
+
+    authenticated = h_high.set_authentication(True).with_checksum(123)
+    assert authenticated.has_authentication()
+    assert authenticated.checksum == 123
+    unpacked = FileHeader.unpack(authenticated.pack())
+    assert unpacked.has_authentication()
+    assert unpacked.checksum == 123
+
+    unauthenticated = authenticated.set_authentication(False).with_checksum(0)
+    assert not unauthenticated.has_authentication()
+    assert unauthenticated.checksum == 0

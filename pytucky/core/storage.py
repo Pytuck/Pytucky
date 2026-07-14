@@ -80,6 +80,21 @@ class TransactionSnapshot:
     采用深拷贝策略确保数据隔离。
     """
 
+    @staticmethod
+    def _clone_index(index: BaseIndex) -> BaseIndex:
+        """克隆索引状态，同时保留 lazy proxy 的 Store/Column 引用。"""
+        cloned = copy.copy(index)
+        for attr_name in (
+            'map',
+            'sorted_values',
+            'value_to_pks',
+            '_added',
+            '_removed',
+        ):
+            if hasattr(index, attr_name):
+                setattr(cloned, attr_name, copy.deepcopy(getattr(index, attr_name)))
+        return cloned
+
     def __init__(self, tables: dict[str, 'Table']):
         """
         创建快照
@@ -87,7 +102,8 @@ class TransactionSnapshot:
         Args:
             tables: 当前所有表的字典 {table_name: Table}
         """
-        self.table_snapshots: dict[str, dict] = {}
+        self.table_objects = dict(tables)
+        self.table_snapshots: dict[str, dict[str, Any]] = {}
 
         # 深拷贝所有表的关键状态
         for table_name, table in tables.items():
@@ -98,8 +114,15 @@ class TransactionSnapshot:
             lazy_loaded = table._lazy_loaded
 
             self.table_snapshots[table_name] = {
+                'name': table.name,
+                'columns': copy.deepcopy(table.columns),
+                'primary_key': table.primary_key,
+                'comment': table.comment,
                 'data': copy.deepcopy(table.data),
-                'indexes': copy.deepcopy(table.indexes),
+                'indexes': {
+                    name: self._clone_index(index)
+                    for name, index in table.indexes.items()
+                },
                 'next_id': table.next_id,
                 'pk_offsets': pk_offsets,
                 '_lazy_loaded': lazy_loaded,
@@ -119,25 +142,33 @@ class TransactionSnapshot:
         Args:
             tables: 要恢复的表字典
         """
-        for table_name, snapshot in self.table_snapshots.items():
-            if table_name in tables:
-                table = tables[table_name]
-                # 直接替换引用（快照已经是深拷贝）
-                table.data = snapshot['data']
-                table.indexes = snapshot['indexes']
-                table.next_id = snapshot['next_id']
+        tables.clear()
+        tables.update(self.table_objects)
 
-                # 恢复 lazy 相关运行时元数据，确保回滚后仍可按需加载
-                table._pk_offsets = copy.deepcopy(snapshot.get('pk_offsets'))
-                table._lazy_loaded = bool(snapshot.get('_lazy_loaded', False))
-                table._data_file = copy.deepcopy(snapshot.get('_data_file'))
-                table._backend = snapshot.get('_backend')
-                table._data_dirty = bool(snapshot.get('_data_dirty', False))
-                table._schema_dirty = bool(snapshot.get('_schema_dirty', False))
-                # 恢复显式的 dirty PK 集合
-                table.inserted = set(snapshot.get('inserted', set()))
-                table.updated = set(snapshot.get('updated', set()))
-                table.deleted = set(snapshot.get('deleted', set()))
+        for table_name, snapshot in self.table_snapshots.items():
+            table = tables[table_name]
+            table.name = snapshot['name']
+            table.columns = snapshot['columns']
+            table.primary_key = snapshot['primary_key']
+            table.comment = snapshot['comment']
+            table.data = snapshot['data']
+            table.indexes = snapshot['indexes']
+            table.next_id = snapshot['next_id']
+            for column_name, index in table.indexes.items():
+                if hasattr(index, '_column') and column_name in table.columns:
+                    setattr(index, '_column', table.columns[column_name])
+
+            # 恢复 lazy 相关运行时元数据，确保回滚后仍可按需加载
+            table._pk_offsets = copy.deepcopy(snapshot.get('pk_offsets'))
+            table._lazy_loaded = bool(snapshot.get('_lazy_loaded', False))
+            table._data_file = copy.deepcopy(snapshot.get('_data_file'))
+            table._backend = snapshot.get('_backend')
+            table._data_dirty = bool(snapshot.get('_data_dirty', False))
+            table._schema_dirty = bool(snapshot.get('_schema_dirty', False))
+            # 恢复显式的 dirty PK 集合
+            table.inserted = set(snapshot.get('inserted', set()))
+            table.updated = set(snapshot.get('updated', set()))
+            table.deleted = set(snapshot.get('deleted', set()))
 
 class Table:
     """表管理"""
@@ -245,66 +276,7 @@ class Table:
         Raises:
             DuplicateKeyError: 主键重复
         """
-        # 处理主键
-        if self.primary_key and self.primary_key in self.columns:
-            # 有用户主键
-            pk = record.get(self.primary_key)
-            # 转换主键类型
-            pk = self._normalize_pk(pk)
-            if pk is not None:
-                # 将转换后的 pk 写回 record
-                record[self.primary_key] = pk
-            if pk is None:
-                # 自动生成主键（仅支持int类型）
-                pk_column = self.columns[self.primary_key]
-                if pk_column.col_type == int:
-                    pk = self.next_id
-                    self.next_id += 1
-                    record[self.primary_key] = pk
-                else:
-                    raise ValidationError(
-                        f"Primary key '{self.primary_key}' must be provided",
-                        table_name=self.name,
-                        column_name=self.primary_key
-                    )
-            else:
-                # 检查主键是否已存在
-                if self.has_pk(pk):
-                    raise DuplicateKeyError(self.name, pk)
-        else:
-            # 无用户主键：使用内部 rowid
-            pk = self.next_id
-            self.next_id += 1
-            # 不将 pk 写入 record（隐式主键不作为列存在）
-
-        # 验证和处理所有字段
-        validated_record = {}
-        for col_name, column in self.columns.items():
-            value = record.get(col_name)
-            validated_value = column.validate(value)
-            validated_record[col_name] = validated_value
-
-        # 存储记录
-        self.data[pk] = validated_record
-
-        # 更新索引
-        for col_name, index in self.indexes.items():
-            value = validated_record.get(col_name)
-            if value is not None:
-                index.insert(value, pk)
-
-        # 更新next_id
-        if isinstance(pk, int) and pk >= self.next_id:
-            self.next_id = pk + 1
-
-        # 维护 dirty PK 集合：新插入的 PK 归入 inserted
-        self.inserted.add(pk)
-        # 如果之前被标记为 deleted 或 updated，清理它们
-        self.deleted.discard(pk)
-        self.updated.discard(pk)
-
-        self._data_dirty = True
-        return pk
+        return self.bulk_insert([record])[0]
 
     def update(self, pk: Any, record: dict[str, Any]) -> None:
         """
@@ -317,44 +289,7 @@ class Table:
         Raises:
             RecordNotFoundError: 记录不存在
         """
-        # 转换主键类型
-        pk = self._normalize_pk(pk)
-        if pk not in self.data:
-            if not self.has_pk(pk):
-                raise RecordNotFoundError(self.name, pk)
-            self.data[pk] = self.get(pk)
-
-        old_record = self.data[pk]
-
-        # 验证和处理字段
-        validated_record = old_record.copy()
-        for col_name, value in record.items():
-            if col_name in self.columns:
-                column = self.columns[col_name]
-                validated_record[col_name] = column.validate(value)
-
-        # 更新索引（先删除旧值，再插入新值）
-        for col_name, index in self.indexes.items():
-            old_value = old_record.get(col_name)
-            new_value = validated_record.get(col_name)
-
-            if old_value != new_value:
-                if old_value is not None:
-                    index.remove(old_value, pk)
-                if new_value is not None:
-                    index.insert(new_value, pk)
-
-        # 存储记录
-        self.data[pk] = validated_record
-        # 维护 dirty PK 集合：如果是新插入保留 inserted，否则视为 updated
-        if pk in self.inserted:
-            # 已在 inserted 中，保持 inserted 不变
-            pass
-        else:
-            self.updated.add(pk)
-        # 删除可能的 deleted 标记
-        self.deleted.discard(pk)
-        self._data_dirty = True
+        self.bulk_update([(pk, record)])
 
     def delete(self, pk: Any) -> None:
         """
@@ -413,6 +348,8 @@ class Table:
             return []
 
         pks: list[Any] = []
+        prepared_records = [dict(record) for record in records]
+        next_id = self.next_id
 
         # 第一阶段：批量分配主键
         has_user_pk = self.primary_key and self.primary_key in self.columns
@@ -420,7 +357,7 @@ class Table:
             pk_column = self.columns[self.primary_key]  # type: ignore[index]
             auto_count = 0
             # 先统计需要自动分配主键的数量
-            for record in records:
+            for record in prepared_records:
                 pk = record.get(self.primary_key)  # type: ignore[arg-type]
                 if pk is None:
                     if pk_column.col_type == int:
@@ -432,11 +369,11 @@ class Table:
                             column_name=self.primary_key
                         )
             # 一次性预留主键范围
-            start_id = self.next_id
-            self.next_id += auto_count
+            start_id = next_id
+            next_id += auto_count
             auto_idx = 0
 
-            for record in records:
+            for record in prepared_records:
                 pk = record.get(self.primary_key)  # type: ignore[arg-type]
                 pk = self._normalize_pk(pk)
                 if pk is None:
@@ -445,16 +382,13 @@ class Table:
                     record[self.primary_key] = pk  # type: ignore[index]
                 else:
                     record[self.primary_key] = pk  # type: ignore[index]
-                    if self.has_pk(pk):
-                        raise DuplicateKeyError(self.name, pk)
-                # 检查已分配的主键是否与前面的冲突
                 if self.has_pk(pk):
                     raise DuplicateKeyError(self.name, pk)
                 pks.append(pk)
         else:
             # 无用户主键：批量分配 rowid
-            start_id = self.next_id
-            self.next_id += len(records)
+            start_id = next_id
+            next_id += len(prepared_records)
             for i in range(len(records)):
                 pks.append(start_id + i)
 
@@ -467,31 +401,46 @@ class Table:
                     raise DuplicateKeyError(self.name, pk)
                 seen[pk] = 1
 
-        # 第二阶段：批量验证字段并存储记录
-        for i, record in enumerate(records):
-            pk = pks[i]
+        # 第二阶段：先验证整个批次，任何失败都不修改表状态
+        validated_records: list[dict[str, Any]] = []
+        for record in prepared_records:
             validated_record: dict[str, Any] = {}
             for col_name, column in self.columns.items():
                 value = record.get(col_name)
                 validated_value = column.validate(value)
                 validated_record[col_name] = validated_value
+            validated_records.append(validated_record)
+
+        # 第三阶段：先更新索引；失败时撤销已应用的索引项
+        applied_index_entries: list[tuple[BaseIndex, Any, Any]] = []
+        try:
+            for col_name, index in self.indexes.items():
+                for pk, validated_record in zip(pks, validated_records):
+                    value = validated_record.get(col_name)
+                    if value is not None:
+                        index.insert(value, pk)
+                        applied_index_entries.append((index, value, pk))
+        except Exception:
+            for index, value, pk in reversed(applied_index_entries):
+                index.remove(value, pk)
+            raise
+
+        # 所有可能失败的步骤完成后再提交数据和状态
+        for original, prepared, pk, validated_record in zip(
+            records, prepared_records, pks, validated_records
+        ):
+            if self.primary_key:
+                original[self.primary_key] = prepared[self.primary_key]
             self.data[pk] = validated_record
-            # 维护 dirty 集合：这些都是插入
             self.inserted.add(pk)
             self.deleted.discard(pk)
             self.updated.discard(pk)
 
-        # 第三阶段：批量更新索引
-        for col_name, index in self.indexes.items():
-            for i, pk in enumerate(pks):
-                value = self.data[pk].get(col_name)
-                if value is not None:
-                    index.insert(value, pk)
-
         # 更新 next_id（处理手动指定的大主键）
         for pk in pks:
-            if isinstance(pk, int) and pk >= self.next_id:
-                self.next_id = pk + 1
+            if isinstance(pk, int) and pk >= next_id:
+                next_id = pk + 1
+        self.next_id = next_id
 
         self._data_dirty = True
         return pks
@@ -513,17 +462,20 @@ class Table:
         if not updates:
             return 0
 
-        count = 0
-
+        original_records: dict[Any, dict[str, Any]] = {}
+        validated_records: dict[Any, dict[str, Any]] = {}
         for pk, record in updates:
             pk = self._normalize_pk(pk)
-            if pk not in self.data:
-                # 如果在懒加载模式且 pk 在磁盘上，先从文件加载
+            if pk in validated_records:
+                old_record = validated_records[pk]
+            elif pk in self.data:
+                old_record = self.data[pk]
+                original_records[pk] = old_record
+            else:
                 if not self.has_pk(pk):
                     raise RecordNotFoundError(self.name, pk)
-                self.data[pk] = self.get(pk)
-
-            old_record = self.data[pk]
+                old_record = self.get(pk)
+                original_records[pk] = old_record
 
             # 验证和处理字段
             validated_record = old_record.copy()
@@ -532,28 +484,42 @@ class Table:
                     column = self.columns[col_name]
                     validated_record[col_name] = column.validate(value)
 
-            # 更新索引（先删除旧值，再插入新值）
-            for col_name, index in self.indexes.items():
-                old_value = old_record.get(col_name)
-                new_value = validated_record.get(col_name)
+            validated_records[pk] = validated_record
 
-                if old_value != new_value:
+        # 验证全部成功后再修改索引；失败时按相反顺序撤销
+        undo_index_actions: list[tuple[str, BaseIndex, Any, Any]] = []
+        try:
+            for pk, validated_record in validated_records.items():
+                old_record = original_records[pk]
+                for col_name, index in self.indexes.items():
+                    old_value = old_record.get(col_name)
+                    new_value = validated_record.get(col_name)
+                    if old_value == new_value:
+                        continue
                     if old_value is not None:
                         index.remove(old_value, pk)
+                        undo_index_actions.append(('insert', index, old_value, pk))
                     if new_value is not None:
                         index.insert(new_value, pk)
+                        undo_index_actions.append(('remove', index, new_value, pk))
+        except Exception:
+            for action, index, value, pk in reversed(undo_index_actions):
+                if action == 'insert':
+                    index.insert(value, pk)
+                else:
+                    index.remove(value, pk)
+            raise
 
-            # 存储记录
+        for pk, validated_record in validated_records.items():
             self.data[pk] = validated_record
-            # 维护 dirty 集合：更新时若在 inserted 中则保持 inserted，否则加入 updated
             if pk in self.inserted:
                 pass
             else:
                 self.updated.add(pk)
             self.deleted.discard(pk)
-            count += 1
 
-        if count > 0:
+        count = len(updates)
+        if count:
             self._data_dirty = True
         return count
 

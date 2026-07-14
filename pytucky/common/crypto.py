@@ -10,6 +10,7 @@ Pytucky 加密模块 - 纯 Python 实现，零外部依赖
 from __future__ import annotations
 
 import hashlib
+import hmac
 import struct
 
 from .exceptions import ConfigurationError
@@ -73,7 +74,25 @@ class CryptoProvider:
         Returns:
             密钥是否匹配
         """
-        return CryptoProvider.compute_key_check(key) == key_check
+        return hmac.compare_digest(CryptoProvider.compute_key_check(key), key_check)
+
+    @staticmethod
+    def compute_auth_tag(key: bytes, data: bytes) -> int:
+        """计算 PTK7 文件级 HMAC-SHA256 认证标签（截断为 64 位）。"""
+        auth_key = hashlib.sha256(b"pytucky-ptk7-auth-key-v1\x00" + key).digest()
+        digest = hmac.new(
+            auth_key,
+            b"pytucky-ptk7-auth-v1\x00" + data,
+            hashlib.sha256,
+        ).digest()
+        return int.from_bytes(digest[:8], "little")
+
+    @staticmethod
+    def verify_auth_tag(key: bytes, data: bytes, expected: int) -> bool:
+        """使用常量时间比较验证 PTK7 文件级认证标签。"""
+        actual_bytes = CryptoProvider.compute_auth_tag(key, data).to_bytes(8, "little")
+        expected_bytes = expected.to_bytes(8, "little")
+        return hmac.compare_digest(actual_bytes, expected_bytes)
 
 class XORCipher:
     """
@@ -282,7 +301,7 @@ class ChaCha20Cipher:
 
     纯 Python 实现的 ChaCha20 流密码（RFC 7539）
 
-    安全性：密码学安全，可抵抗专业攻击
+    安全性：提供密码学级机密性；文件完整性由 Store 层 HMAC 负责
     性能税：中等（~30-50%）
     """
 

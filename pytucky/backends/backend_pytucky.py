@@ -101,7 +101,7 @@ class HashIndexProxy(HashIndex):
                 del self._added[value]
         self._removed.setdefault(value, set()).add(pk)
 
-    def lookup(self, value: Any):
+    def lookup(self, value: Any) -> set[Any]:
         self._materialize()
         return HashIndex.lookup(self, value)
 
@@ -178,14 +178,20 @@ class SortedIndexProxy(SortedIndex):
                 del self._added[value]
         self._removed.setdefault(value, set()).add(pk)
 
-    def lookup(self, value: Any):
+    def lookup(self, value: Any) -> set[Any]:
         self._materialize()
         return SortedIndex.lookup(self, value)
 
     def supports_range_query(self) -> bool:
         return True
 
-    def range_query(self, min_val=None, max_val=None, include_min=True, include_max=True):
+    def range_query(
+        self,
+        min_val: Any | None = None,
+        max_val: Any | None = None,
+        include_min: bool = True,
+        include_max: bool = True,
+    ) -> set[Any]:
         if self._materialized:
             return SortedIndex.range_query(self, min_val, max_val, include_min, include_max)
         state = self._store.table_state(self._table)
@@ -194,8 +200,15 @@ class SortedIndexProxy(SortedIndex):
         if cim is not None:
             blob = self._store._read_region(cim.offset, cim.size)
             from ..backends import index
-            pks = index.range_search_sorted_pairs(blob, self._column, min_val, max_val, include_min, include_max)
-            result.update(pks)
+            disk_pks = index.range_search_sorted_pairs(
+                blob,
+                self._column,
+                min_val,
+                max_val,
+                include_min,
+                include_max,
+            )
+            result.update(disk_pks)
         else:
             for pk in list(state.pk_index.keys()):
                 try:
@@ -211,15 +224,18 @@ class SortedIndexProxy(SortedIndex):
                     continue
                 result.add(pk)
 
-        for value, pks in self._added.items():
+        for value, added_pks in self._added.items():
             if min_val is not None and ((value < min_val) or (not include_min and value == min_val)):
                 continue
             if max_val is not None and ((value > max_val) or (not include_max and value == max_val)):
                 continue
-            result.update(pks)
-        for value, pks in self._removed.items():
-            if value in result:
-                result.difference_update(pks)
+            result.update(added_pks)
+        for value, removed_pks in self._removed.items():
+            if min_val is not None and ((value < min_val) or (not include_min and value == min_val)):
+                continue
+            if max_val is not None and ((value > max_val) or (not include_max and value == max_val)):
+                continue
+            result.difference_update(removed_pks)
         return result
 
 

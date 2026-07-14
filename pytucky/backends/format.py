@@ -21,6 +21,7 @@ class FileHeader:
     FLAG_ENCRYPTION_ENABLED = 0x02
     FLAG_ENCRYPTION_LEVEL_MASK = 0x0C
     FLAG_ENCRYPTION_LEVEL_SHIFT = 2
+    FLAG_AUTHENTICATION_ENABLED = 0x10
 
     magic: bytes = MAGIC_V7
     version: int = 7
@@ -78,6 +79,47 @@ class FileHeader:
         if level_code == 3:
             return 'high'
         return None
+
+    def has_authentication(self) -> bool:
+        """文件是否声明包含 Pytucky HMAC 认证标签。"""
+        return (self.flags & self.FLAG_AUTHENTICATION_ENABLED) != 0
+
+    def set_authentication(self, enabled: bool) -> "FileHeader":
+        """设置或清除文件级认证标志。"""
+        flags = self.flags
+        if enabled:
+            flags |= self.FLAG_AUTHENTICATION_ENABLED
+        else:
+            flags &= ~self.FLAG_AUTHENTICATION_ENABLED
+        return type(self)(
+            magic=self.magic,
+            version=self.version,
+            flags=flags,
+            table_count=self.table_count,
+            schema_offset=self.schema_offset,
+            schema_size=self.schema_size,
+            table_ref_offset=self.table_ref_offset,
+            table_ref_size=self.table_ref_size,
+            file_size=self.file_size,
+            checksum=self.checksum,
+            reserved=self.reserved,
+        )
+
+    def with_checksum(self, checksum: int) -> "FileHeader":
+        """返回替换 checksum 后的新文件头。"""
+        return type(self)(
+            magic=self.magic,
+            version=self.version,
+            flags=self.flags,
+            table_count=self.table_count,
+            schema_offset=self.schema_offset,
+            schema_size=self.schema_size,
+            table_ref_offset=self.table_ref_offset,
+            table_ref_size=self.table_ref_size,
+            file_size=self.file_size,
+            checksum=checksum,
+            reserved=self.reserved,
+        )
 
     def set_encryption(self, level: str | None) -> "FileHeader":
         # Accept None to clear encryption (convenience for tests)

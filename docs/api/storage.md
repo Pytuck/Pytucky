@@ -43,7 +43,21 @@ db = Storage(
     file_path='secure.pytuck',
     backend_options=PytuckBackendOptions(encryption='high', password='secret123'),
 )
+
+# 严格要求文件必须带有 Pytucky HMAC 认证标签
+strict_db = Storage(
+    file_path='secure.pytuck',
+    backend_options=PytuckBackendOptions(
+        password='secret123',
+        require_authentication=True,
+    ),
+)
 ```
+
+Pytucky 写出的加密 PTK7 文件会在文件头保存 HMAC-SHA256 截断认证标签，用于检测
+header、schema、目录、索引和记录密文被篡改。为了继续读取旧版或 pytuck 写出的 PTK7，
+默认仍接受没有该标签的文件；安全边界要求拒绝未认证文件时，请启用
+`require_authentication=True`。
 
 如果 `file_path` 指向已存在的文件，构造时自动加载数据。
 

@@ -105,7 +105,7 @@ uv publish
 
 在正式发布前，建议按下面顺序执行：
 
-1. 更新 `pyproject.toml` 中的版本号。
+1. 只更新 `pytucky/__init__.py` 中的 `__version__`；`pyproject.toml` 会动态读取该值。
 2. 同步 `README.md`、`docs/guide/development.md` 与其他用户可见文档。
 3. 运行发布前验证：
 

@@ -67,3 +67,48 @@ def test_transaction_rollback_restores_original_data(tmp_path: Path) -> None:
             session.close()
         finally:
             db.close()
+
+
+@pytest.mark.feature
+def test_transaction_rollback_restores_table_membership_and_schema() -> None:
+    db = Storage(in_memory=True)
+    db.create_table("base", [Column(int, name="id", primary_key=True)])
+
+    with pytest.raises(RuntimeError, match="rollback"):
+        with db.transaction():
+            db.add_column("base", Column(str, name="temporary"))
+            db.drop_table("base")
+            db.create_table("new", [Column(int, name="id", primary_key=True)])
+            raise RuntimeError("rollback")
+
+    assert set(db.tables) == {"base"}
+    assert set(db.get_table("base").columns) == {"id"}
+
+
+@pytest.mark.feature
+def test_transaction_snapshot_supports_reopened_lazy_indexes(tmp_path: Path) -> None:
+    db_path = tmp_path / "lazy-transaction.pytuck"
+    db = Storage(db_path)
+    db.create_table(
+        "users",
+        [
+            Column(int, name="id", primary_key=True),
+            Column(str, name="name", index=True),
+        ],
+    )
+    db.insert("users", {"name": "A"})
+    db.flush()
+    db.close()
+
+    reopened = Storage(db_path)
+    try:
+        with pytest.raises(RuntimeError, match="rollback"):
+            with reopened.transaction():
+                reopened.update("users", 1, {"name": "B"})
+                raise RuntimeError("rollback")
+
+        assert reopened.select("users", 1)["name"] == "A"
+        assert reopened.get_table("users").indexes["name"].lookup("A") == {1}
+        assert reopened.get_table("users").indexes["name"].lookup("B") == set()
+    finally:
+        reopened.close()

@@ -3,6 +3,7 @@
 .vscode/
 .cursor/
 .claude/
+.codegraph/
 __pycache__/
 *.pyc
 *.pyo
@@ -21,4 +22,3 @@ docs/superpowers/
 .tmp_bench_profile/
 tests/benchmark/benchmark_output/
 .tmp_bench
-

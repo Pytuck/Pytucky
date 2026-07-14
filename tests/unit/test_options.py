@@ -9,10 +9,16 @@ def test_pytuck_backend_options_have_encryption_fields_and_defaults():
     # 默认无密码
     assert hasattr(opts, 'password')
     assert opts.password is None
+    assert opts.require_authentication is False
 
 
 def test_pytuck_backend_options_accept_explicit_encryption_config():
-    opts = PytuckBackendOptions(encryption='high', password='secret123')
+    opts = PytuckBackendOptions(
+        encryption='high',
+        password='secret123',
+        require_authentication=True,
+    )
 
     assert opts.encryption == 'high'
     assert opts.password == 'secret123'
+    assert opts.require_authentication is True

@@ -20,6 +20,7 @@ from ..core.orm import Column
 from ..core.index import BaseIndex
 from ..core.types import TypeRegistry
 from .format import (
+    HEADER_STRUCT,
     NULL_BITMAP_STRUCT,
     PK_DIR_INT_STRUCT,
     ColumnIndexMeta,
@@ -182,9 +183,11 @@ class Store:
         self._payload_offset = 0
         self._loaded_encryption_level = None
         with self.file_path.open("rb") as file_obj:
-            header = FileHeader.unpack(file_obj.read(64))
+            header = FileHeader.unpack(file_obj.read(HEADER_STRUCT.size))
+            if header.has_authentication() and not header.is_encrypted():
+                raise SerializationError("未加密 PTK7 文件不能声明 HMAC 认证")
             if header.is_encrypted():
-                file_obj.seek(64)
+                file_obj.seek(HEADER_STRUCT.size)
                 crypto_blob = file_obj.read(CRYPTO_META_STRUCT.size)
                 crypto_meta = CryptoMetadataV7.unpack(crypto_blob)
                 level = header.get_encryption_level()
@@ -195,8 +198,24 @@ class Store:
                 key = CryptoProvider.derive_key(self.options.password, crypto_meta.salt, level)
                 if not CryptoProvider.verify_key(key, crypto_meta.key_check):
                     raise EncryptionError("密码错误")
+                if header.has_authentication():
+                    if header.checksum == 0:
+                        raise EncryptionError("PTK7 HMAC 认证标签缺失")
+                    file_obj.seek(HEADER_STRUCT.size)
+                    authenticated_body = file_obj.read()
+                    authenticated_data = header.with_checksum(0).pack() + authenticated_body
+                    if not CryptoProvider.verify_auth_tag(
+                        key,
+                        authenticated_data,
+                        header.checksum,
+                    ):
+                        raise EncryptionError("PTK7 文件完整性认证失败")
+                elif self.options.require_authentication:
+                    raise EncryptionError("PTK7 文件未包含 Pytucky HMAC 认证标签")
                 self._cipher = get_cipher(level, key)
                 self._loaded_encryption_level = level
+            elif self.options.require_authentication:
+                raise EncryptionError("未加密 PTK7 文件无法满足完整性认证要求")
             # read schema and table refs (schema_offset may include crypto metadata)
             file_obj.seek(header.schema_offset)
             schema_blob = file_obj.read(header.schema_size)
@@ -497,8 +516,11 @@ class Store:
             if self.options.encryption is not None
             else self._loaded_encryption_level
         )
+        if self.options.require_authentication and effective_encryption is None:
+            raise ConfigurationError("严格完整性认证要求启用 PTK7 加密")
 
         crypto_meta: CryptoMetadataV7 | None = None
+        key: bytes | None = None
         cipher = None
         if effective_encryption is not None:
             if effective_encryption not in ENCRYPTION_LEVELS:
@@ -595,18 +617,31 @@ class Store:
         )
         if crypto_meta is not None:
             header = header.set_encryption(effective_encryption)
+            header = header.set_authentication(True)
         else:
             header = header.set_encryption(None)
+            header = header.set_authentication(False)
+
+        file_body = b"".join(
+            [
+                crypto_meta.pack() if crypto_meta is not None else b"",
+                schema_catalog,
+                table_refs_blob_bytes,
+                payload_blob,
+            ]
+        )
+        if crypto_meta is not None:
+            assert key is not None
+            authenticated_data = header.with_checksum(0).pack() + file_body
+            header = header.with_checksum(
+                CryptoProvider.compute_auth_tag(key, authenticated_data)
+            )
 
         self.close()
         temp_path = self.file_path.with_suffix(self.file_path.suffix + ".tmp")
         with temp_path.open("wb") as file_obj:
             file_obj.write(header.pack())
-            if crypto_meta is not None:
-                file_obj.write(crypto_meta.pack())
-            file_obj.write(schema_catalog)
-            file_obj.write(table_refs_blob_bytes)
-            file_obj.write(payload_blob)
+            file_obj.write(file_body)
         temp_path.replace(self.file_path)
         self._cipher = cipher
         self._payload_offset = header.table_ref_offset + header.table_ref_size if cipher is not None else 0

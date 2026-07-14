@@ -64,6 +64,12 @@ def test_condition_evaluate_all_ops():
     assert not builder.Condition("name", "STARTSWITH", "world").evaluate(rec)
 
 
+@pytest.mark.parametrize("operator", [">", "<", ">=", "<="])
+def test_condition_range_comparison_treats_none_as_non_match(operator):
+    assert not builder.Condition("age", operator, 18).evaluate({"age": None})
+    assert not builder.Condition("age", operator, None).evaluate({"age": 18})
+
+
 def test_condition_in_falls_back_for_unhashable_values():
     rec = {"tags": [1, 2]}
     condition = builder.Condition("tags", "IN", [[1, 2], [3, 4]])

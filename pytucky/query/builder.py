@@ -69,6 +69,10 @@ class Condition:
         if self.field not in record:
             return False
         field_value = record[self.field]
+        if self.operator in ('>', '<', '>=', '<=') and (
+            field_value is None or self.value is None
+        ):
+            return False
         return bool(_OPERATOR_EVAL[self.operator](field_value, self.value))
 
     def __repr__(self) -> str:
@@ -346,7 +350,7 @@ class Query(Generic[T]):
 
         return self
 
-    def filter_by(self, **kwargs) -> 'Query[T]':
+    def filter_by(self, **kwargs: Any) -> 'Query[T]':
         """
         添加过滤条件（简单等值查询，SQLAlchemy 风格）
 
