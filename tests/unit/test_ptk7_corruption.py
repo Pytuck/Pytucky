@@ -93,3 +93,57 @@ def test_schema_decoder_rejects_malformed_json_entry(tmp_path: Path) -> None:
             b'{"tables":[{"name":"users","columns":"invalid"}]}',
             1,
         )
+
+
+@pytest.mark.parametrize(
+    "column_fragment",
+    [
+        b'"nullable":"false"',
+        b'"primary_key":"false"',
+        b'"index":0',
+    ],
+)
+def test_schema_decoder_rejects_non_strict_column_flags(
+    tmp_path: Path,
+    column_fragment: bytes,
+) -> None:
+    store = Store(tmp_path / "schema-flags.pytuck", open_existing=False)
+    schema = (
+        b'{"tables":[{"name":"users","primary_key":null,"columns":['
+        b'{"name":"value","type_name":"int",'
+        + column_fragment
+        + b'}]}]}'
+    )
+
+    with pytest.raises(SerializationError, match="table schema entry"):
+        store._decode_schema_catalog(schema, 1)
+
+
+def test_flush_rejects_row_length_mismatch_in_unmodified_row(tmp_path: Path) -> None:
+    file_path = tmp_path / "row-length.pytuck"
+    writer = Store(file_path, open_existing=False)
+    writer.create_table(
+        "items",
+        [
+            Column(int, name="id", primary_key=True),
+            Column(str, name="name"),
+        ],
+    )
+    writer.insert("items", {"name": "one"})
+    writer.insert("items", {"name": "two"})
+    writer.flush()
+    row_offset, _ = writer.table_state("items").pk_index[1]
+    writer.close()
+
+    raw = bytearray(file_path.read_bytes())
+    declared_length = int.from_bytes(raw[row_offset : row_offset + 4], "little")
+    raw[row_offset : row_offset + 4] = (declared_length + 1).to_bytes(4, "little")
+    file_path.write_bytes(raw)
+
+    corrupted = Store(file_path)
+    try:
+        corrupted.update("items", 2, {"name": "two-updated"})
+        with pytest.raises(SerializationError, match="payload length mismatch"):
+            corrupted.flush()
+    finally:
+        corrupted.close()

@@ -89,6 +89,21 @@ def _iter_file_chunks(file_obj: BinaryIO) -> Iterator[bytes]:
             return
         yield chunk
 
+
+def _extract_row_payload(row_blob: bytes) -> bytes:
+    """校验行长度前缀并返回载荷，确保所有解码路径规则一致。"""
+    if len(row_blob) < ROW_LENGTH_STRUCT.size:
+        raise SerializationError("Not enough data to decode row length")
+    payload_length = ROW_LENGTH_STRUCT.unpack(
+        row_blob[: ROW_LENGTH_STRUCT.size]
+    )[0]
+    payload = row_blob[ROW_LENGTH_STRUCT.size :]
+    if len(payload) != payload_length:
+        raise SerializationError(
+            f"Row payload length mismatch: expected {payload_length}, got {len(payload)}"
+        )
+    return payload
+
 @dataclass
 class TableOverlay:
     inserted: dict[Any, dict[str, Any]] = field(default_factory=dict)
@@ -845,8 +860,7 @@ class Store:
                     abs_off, length = state.pk_index[pk]
                     rel_off = abs_off - state.data_offset
                     row_blob = data_blob[rel_off:rel_off + length]
-                    payload_length = ROW_LENGTH_STRUCT.unpack(row_blob[:ROW_LENGTH_STRUCT.size])[0]
-                    payload = row_blob[ROW_LENGTH_STRUCT.size:]
+                    payload = _extract_row_payload(row_blob)
                     record = decode_row(
                         state.columns,
                         payload,
@@ -862,10 +876,7 @@ class Store:
                 for pk in disk_pks:
                     abs_off, length = state.pk_index[pk]
                     row_blob = self._read_region(abs_off, length)
-                    if len(row_blob) < ROW_LENGTH_STRUCT.size:
-                        raise SerializationError("Not enough data to decode row length")
-                    payload_length = ROW_LENGTH_STRUCT.unpack(row_blob[:ROW_LENGTH_STRUCT.size])[0]
-                    payload = row_blob[ROW_LENGTH_STRUCT.size:]
+                    payload = _extract_row_payload(row_blob)
                     record = decode_row(
                         state.columns,
                         payload,
@@ -905,14 +916,7 @@ class Store:
 
     def _read_row_at(self, state: TableState, pk: Any, offset: int, length: int) -> dict[str, Any]:
         row_blob = self._read_region(offset, length)
-        if len(row_blob) < ROW_LENGTH_STRUCT.size:
-            raise SerializationError("Not enough data to decode row length")
-        payload_length = ROW_LENGTH_STRUCT.unpack(row_blob[: ROW_LENGTH_STRUCT.size])[0]
-        payload = row_blob[ROW_LENGTH_STRUCT.size :]
-        if len(payload) != payload_length:
-            raise SerializationError(
-                f"Row payload length mismatch: expected {payload_length}, got {len(payload)}"
-            )
+        payload = _extract_row_payload(row_blob)
         decode_columns, decode_codecs = self._get_decode_layout(state)
         record = decode_row(
             state.columns,
@@ -1072,10 +1076,14 @@ class Store:
                         col_type = TypeRegistry.get_type_by_name(type_name)
                         if TypeRegistry.get_type_name(col_type) != type_name:
                             raise ValueError(f"unknown column type: {type_name}")
-                        nullable = bool(c.get("nullable", True))
-                        primary = bool(c.get("primary_key", False))
+                        nullable = c.get("nullable", True)
+                        if not isinstance(nullable, bool):
+                            raise TypeError("column nullable flag must be a boolean")
+                        primary = c.get("primary_key", False)
+                        if not isinstance(primary, bool):
+                            raise TypeError("column primary key flag must be a boolean")
                         index = c.get("index", False)
-                        if index not in (False, True, "sorted"):
+                        if not isinstance(index, bool) and index != "sorted":
                             raise ValueError("column index flag is invalid")
                         cols.append(
                             Column(

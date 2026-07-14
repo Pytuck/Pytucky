@@ -80,6 +80,8 @@
 
 ## 复现命令
 
+`-n / --count` 必须是大于零的整数。
+
 ```bash
 # Pytucky
 uv run python tests/benchmark/benchmark.py -n 10000 --extended

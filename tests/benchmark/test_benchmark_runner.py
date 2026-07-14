@@ -86,3 +86,23 @@ def test_build_temp_dir_uses_system_temp_outside_cwd(tmp_path: Path, monkeypatch
 
     assert not temp_dir.exists()
     assert not (tmp_path / bench_module.TEMP_DIR_NAME).exists()
+
+
+@pytest.mark.benchmark
+@pytest.mark.parametrize("value", ["0", "-1", "invalid"])
+def test_positive_record_count_rejects_invalid_values(value: str) -> None:
+    with pytest.raises(argparse.ArgumentTypeError):
+        bench_module.positive_record_count(value)
+
+
+@pytest.mark.benchmark
+def test_main_rejects_non_positive_programmatic_count() -> None:
+    args = argparse.Namespace(
+        count=0,
+        extended=False,
+        keep=False,
+        output_json=None,
+    )
+
+    with pytest.raises(argparse.ArgumentTypeError, match="greater than zero"):
+        bench_module.main(args)

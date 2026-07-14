@@ -22,6 +22,17 @@ OUTPUT_DIR = Path(__file__).parent / "benchmark_output"
 TEMP_DIR_NAME = ".tmp_bench"
 TABLE_NAME = "benchmark_users"
 
+
+def positive_record_count(value: str) -> int:
+    """解析大于零的 benchmark 记录数。"""
+    try:
+        count = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("record count must be an integer") from exc
+    if count <= 0:
+        raise argparse.ArgumentTypeError("record count must be greater than zero")
+    return count
+
 class Timer:
     def __init__(self) -> None:
         self.elapsed: float = 0.0
@@ -289,7 +300,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-n",
         "--count",
-        type=int,
+        type=positive_record_count,
         default=DEFAULT_RECORD_COUNT,
         help="record count to benchmark",
     )
@@ -342,11 +353,12 @@ def main(args: argparse.Namespace | None = None) -> list[dict[str, Any]]:
     if args is None:
         args = parse_args()
 
+    record_count = positive_record_count(str(args.count))
     temp_dir = build_temp_dir(bool(args.keep))
     try:
         benchmark = PytuckyBenchmark(temp_dir, extended=bool(args.extended))
-        results = [benchmark.run(int(args.count))]
-        payload = build_output_payload(int(args.count), results)
+        results = [benchmark.run(record_count)]
+        payload = build_output_payload(record_count, results)
         if args.output_json:
             write_output_json(Path(args.output_json), payload)
         return results
