@@ -25,8 +25,13 @@ def test_benchmark_schema(tmp_path: Path) -> None:
         "reopen_first_query",
         "file_size",
         "query_indexed",
+        "transaction_begin",
+        "transaction_rollback",
+        "transaction_peak_memory",
     ):
         assert key in result
+
+    assert result["transaction_peak_memory"] >= 0
 
     assert "lazy_load" not in result
     assert "lazy_query_first" not in result

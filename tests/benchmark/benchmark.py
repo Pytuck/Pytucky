@@ -8,6 +8,7 @@ import platform
 import shutil
 import tempfile
 import time
+import tracemalloc
 from datetime import datetime
 from pathlib import Path
 from types import TracebackType
@@ -138,6 +139,47 @@ class PytuckyBenchmark:
                 _ = result.first()
         return timer.elapsed
 
+    def bench_transaction_snapshot(self, count: int) -> dict[str, float | int]:
+        """测量当前内存快照事务的固定成本，不改变事务实现。"""
+        transaction_db = Storage(in_memory=True)
+        transaction_db.create_table(
+            "transaction_rows",
+            [
+                Column(int, name="id", primary_key=True),
+                Column(str, name="name", index=True),
+            ],
+        )
+        transaction_db.bulk_insert(
+            "transaction_rows",
+            [{"name": f"row-{index}"} for index in range(count)],
+        )
+
+        tracemalloc.start()
+        try:
+            with Timer() as begin_timer:
+                with transaction_db.transaction():
+                    pass
+            _, peak_memory = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        with Timer() as rollback_timer:
+            try:
+                with transaction_db.transaction():
+                    if count:
+                        transaction_db.update("transaction_rows", 1, {"name": "changed"})
+                    raise RuntimeError("benchmark rollback")
+            except RuntimeError as exc:
+                if str(exc) != "benchmark rollback":
+                    raise
+
+        transaction_db.close()
+        return {
+            "transaction_begin": begin_timer.elapsed,
+            "transaction_rollback": rollback_timer.elapsed,
+            "transaction_peak_memory": peak_memory,
+        }
+
     def run(self, count: int) -> dict[str, Any]:
         results: dict[str, Any] = {
             "engine": "pytucky",
@@ -152,6 +194,7 @@ class PytuckyBenchmark:
             results["query_pk"] = self.bench_query_pk(session, user_model, count)
             if self.extended:
                 results["query_indexed"] = self.bench_query_indexed(session, user_model, count)
+                results.update(self.bench_transaction_snapshot(count))
         except Exception as exc:
             results["success"] = False
             results["error"] = str(exc)
