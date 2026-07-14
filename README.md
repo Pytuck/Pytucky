@@ -223,7 +223,7 @@ from pytucky import Storage, declarative_base, Session, Column
 uv run pytest tests/ -v
 ```
 
-当前：**218 passed**
+当前：**232 passed**
 
 ## 项目目标
 

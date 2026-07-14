@@ -20,6 +20,13 @@
 | reopen | 再次打开数据库文件 |
 | reopen_first_query | 重开后首条主键读取 |
 | file_size | 最终文件体积 |
+| small_update_flush | 仅更新一条记录后的单文件 flush |
+| transaction_begin | 内存快照事务的启动与提交 |
+| transaction_rollback | 修改一条记录后的事务回滚 |
+| transaction_peak_memory | 事务启动时的峰值内存 |
+| encrypted_reopen | 带 HMAC 的 high 加密文件重新打开 |
+| encrypted_reopen_peak_memory | 流式认证期间的峰值内存 |
+| temporary_file_leftover | benchmark 完成后是否残留 `.tmp` |
 
 ## 当前 Pytucky vs Pytuck 基准结果
 
@@ -41,6 +48,29 @@
 - `query_pk` 与 `query_indexed` 均为 100 次查询总耗时。
 - `reopen_first_query` 为 reopen 后首次主键点查耗时。
 - 本表的唯一变量是库实现；环境、schema、数据量与测试顺序保持一致。
+- 新增的事务、加密 reopen 和临时文件指标用于观察 Pytucky 自身，不混入上面的历史
+  pytuck 对照表；需要发布新基准结果时，应在同一环境重新运行两边后再更新表格。
+- benchmark 使用的 `.tmp` 只参与原子替换，数据库仍是可独立复制和打开的单个
+  `.pytuck` 文件；未显式使用 `--keep` 时，所有数据库和临时目录均会清理。
+
+## 新增指标观测样例
+
+以下数据是 2026-07-14 在 Darwin / Python 3.10.19 上对 10,000 条记录进行的一次
+开发观测，只用于确认指标可用，不替代上方同环境、三轮均值的 pytuck 对照结果：
+
+| 指标 | 单次结果 |
+|------|----------|
+| small_update_flush | 41.1ms |
+| transaction_begin | 40.4ms |
+| transaction_rollback | 37.4ms |
+| transaction_peak_memory | 7.68MB |
+| encrypted_reopen | 204.2ms |
+| encrypted_reopen_peak_memory | 3.07MB |
+| encrypted_file_size | 0.42MB |
+| temporary_file_leftover | false |
+
+这组数据表明内存快照在 10,000 条记录时已有可测成本，但当前阶段只记录事实，不据此
+进行事务大重构。加密 reopen 同时包含密码派生和整文件 HMAC 验证成本。
 
 ## 如何选择
 

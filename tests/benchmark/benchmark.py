@@ -15,6 +15,7 @@ from types import TracebackType
 from typing import Any
 
 from pytucky import Column, PureBaseModel, Session, Storage, declarative_base, insert, select
+from pytucky.common.options import PytuckBackendOptions
 
 DEFAULT_RECORD_COUNT = 100
 OUTPUT_DIR = Path(__file__).parent / "benchmark_output"
@@ -43,7 +44,8 @@ class PytuckyBenchmark:
     def __init__(self, temp_dir: Path, extended: bool = False) -> None:
         self.temp_dir = temp_dir
         self.extended = extended
-        self.file_path = temp_dir / "bench_db.pytucky"
+        self.file_path = temp_dir / "bench_db.pytuck"
+        self.encrypted_file_path = temp_dir / "bench_encrypted.pytuck"
 
     def setup(self) -> tuple[Storage, Session, type[PureBaseModel]]:
         self._cleanup_storage_files()
@@ -64,8 +66,13 @@ class PytuckyBenchmark:
         return db, session, BenchmarkUser
 
     def _cleanup_storage_files(self) -> None:
-        journal_path = self.file_path.with_name(".%s.journal" % self.file_path.name)
-        for path in (self.file_path, journal_path):
+        paths = (
+            self.file_path,
+            self.file_path.with_suffix(".pytuck.tmp"),
+            self.encrypted_file_path,
+            self.encrypted_file_path.with_suffix(".pytuck.tmp"),
+        )
+        for path in paths:
             if path.exists() and path.is_file():
                 path.unlink()
 
@@ -90,6 +97,13 @@ class PytuckyBenchmark:
         return timer.elapsed
 
     def bench_save(self, db: Storage) -> float:
+        with Timer() as timer:
+            db.flush()
+        return timer.elapsed
+
+    def bench_small_update_flush(self, db: Storage, count: int) -> float:
+        if count:
+            db.update(TABLE_NAME, min(count, max(1, count // 2)), {"score": 99.5})
         with Timer() as timer:
             db.flush()
         return timer.elapsed
@@ -154,11 +168,14 @@ class PytuckyBenchmark:
             [{"name": f"row-{index}"} for index in range(count)],
         )
 
+        with Timer() as begin_timer:
+            with transaction_db.transaction():
+                pass
+
         tracemalloc.start()
         try:
-            with Timer() as begin_timer:
-                with transaction_db.transaction():
-                    pass
+            with transaction_db.transaction():
+                pass
             _, peak_memory = tracemalloc.get_traced_memory()
         finally:
             tracemalloc.stop()
@@ -180,6 +197,48 @@ class PytuckyBenchmark:
             "transaction_peak_memory": peak_memory,
         }
 
+    def bench_encrypted_reopen(self, count: int) -> dict[str, float | int]:
+        """测量单文件加密数据库 reopen 的耗时、峰值内存与文件大小。"""
+        options = PytuckBackendOptions(encryption="high", password="benchmark-secret")
+        encrypted_db = Storage(file_path=self.encrypted_file_path, backend_options=options)
+        encrypted_db.create_table(
+            "encrypted_rows",
+            [
+                Column(int, name="id", primary_key=True),
+                Column(str, name="value"),
+            ],
+        )
+        encrypted_db.bulk_insert(
+            "encrypted_rows",
+            [{"value": f"encrypted-{index}"} for index in range(count)],
+        )
+        encrypted_db.flush()
+        encrypted_db.close()
+
+        reopen_options = PytuckBackendOptions(password="benchmark-secret")
+        with Timer() as timer:
+            reopened = Storage(
+                file_path=self.encrypted_file_path,
+                backend_options=reopen_options,
+            )
+        reopened.close()
+
+        tracemalloc.start()
+        try:
+            measured_reopen = Storage(
+                file_path=self.encrypted_file_path,
+                backend_options=reopen_options,
+            )
+            _, peak_memory = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        measured_reopen.close()
+        return {
+            "encrypted_reopen": timer.elapsed,
+            "encrypted_reopen_peak_memory": peak_memory,
+            "encrypted_file_size": self.encrypted_file_path.stat().st_size,
+        }
+
     def run(self, count: int) -> dict[str, Any]:
         results: dict[str, Any] = {
             "engine": "pytucky",
@@ -194,7 +253,9 @@ class PytuckyBenchmark:
             results["query_pk"] = self.bench_query_pk(session, user_model, count)
             if self.extended:
                 results["query_indexed"] = self.bench_query_indexed(session, user_model, count)
+                results["small_update_flush"] = self.bench_small_update_flush(db, count)
                 results.update(self.bench_transaction_snapshot(count))
+                results.update(self.bench_encrypted_reopen(count))
         except Exception as exc:
             results["success"] = False
             results["error"] = str(exc)
@@ -210,6 +271,13 @@ class PytuckyBenchmark:
             results["reopen"] = self.bench_reopen()
             results["reopen_first_query"] = self.bench_reopen_first_query(count)
             results["file_size"] = self.file_path.stat().st_size if self.file_path.exists() else 0
+            results["temporary_file_leftover"] = any(
+                path.exists()
+                for path in (
+                    self.file_path.with_suffix(".pytuck.tmp"),
+                    self.encrypted_file_path.with_suffix(".pytuck.tmp"),
+                )
+            )
             results["success"] = True
         except Exception as exc:
             results["success"] = False

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 
 import pytest
 
 from pytucky import Column, Session, Storage, declarative_base, insert, select
 from pytucky import PureBaseModel
+from pytucky.common.options import PytuckBackendOptions
 
 @pytest.mark.feature
 def test_session_commit_persists_inserted_rows(tmp_path: Path) -> None:
@@ -112,3 +114,44 @@ def test_transaction_snapshot_supports_reopened_lazy_indexes(tmp_path: Path) -> 
         assert reopened.get_table("users").indexes["name"].lookup("B") == set()
     finally:
         reopened.close()
+
+
+@pytest.mark.feature
+@pytest.mark.parametrize("encryption", [None, "high"])
+def test_database_file_is_self_contained_after_copy(
+    tmp_path: Path,
+    encryption: str | None,
+) -> None:
+    source_dir = tmp_path / "source"
+    destination_dir = tmp_path / "destination"
+    source_dir.mkdir()
+    destination_dir.mkdir()
+    source_path = source_dir / "portable.pytuck"
+    options = PytuckBackendOptions(
+        encryption=encryption,
+        password="portable-secret" if encryption else None,
+    )
+
+    database = Storage(source_path, backend_options=options)
+    database.create_table(
+        "items",
+        [
+            Column(int, name="id", primary_key=True),
+            Column(str, name="name"),
+        ],
+    )
+    database.insert("items", {"name": "portable"})
+    database.close()
+
+    destination_path = destination_dir / source_path.name
+    shutil.copy2(source_path, destination_path)
+    assert [path.name for path in destination_dir.iterdir()] == ["portable.pytuck"]
+
+    reopen_options = PytuckBackendOptions(
+        password="portable-secret" if encryption else None,
+    )
+    copied = Storage(destination_path, backend_options=reopen_options)
+    try:
+        assert copied.select("items", 1)["name"] == "portable"
+    finally:
+        copied.close()
