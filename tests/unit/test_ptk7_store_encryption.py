@@ -1,16 +1,37 @@
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 
 from pytucky import Column
-from pytucky.backends.store import Store
+from pytucky.backends.store import AUTH_READ_CHUNK_SIZE, Store, _iter_file_chunks
 from pytucky.backends.format import FileHeader, HEADER_STRUCT
 from pytucky.common.exceptions import ConfigurationError, EncryptionError
 from pytucky.common.options import PytuckBackendOptions
+from pytucky.common.crypto import CryptoProvider
 
 _SECRET_VALUE = "Alice-PTK7-Secret"
+
+
+def test_chunked_auth_tag_matches_contiguous_auth_tag() -> None:
+    key = b"k" * 32
+    chunks = (b"header", b"schema", b"payload")
+
+    contiguous = CryptoProvider.compute_auth_tag(key, b"".join(chunks))
+    chunked = CryptoProvider.compute_auth_tag_chunks(key, chunks)
+
+    assert chunked == contiguous
+    assert CryptoProvider.verify_auth_tag_chunks(key, iter(chunks), contiguous)
+
+
+def test_authentication_file_reader_uses_fixed_size_chunks() -> None:
+    payload = b"x" * (AUTH_READ_CHUNK_SIZE + 17)
+
+    chunks = list(_iter_file_chunks(BytesIO(payload)))
+
+    assert [len(chunk) for chunk in chunks] == [AUTH_READ_CHUNK_SIZE, 17]
 
 @pytest.mark.parametrize(
     ("encryption", "password", "plaintext_visible"),

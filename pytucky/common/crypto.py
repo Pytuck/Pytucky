@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import struct
+from typing import Iterable
 
 from .exceptions import ConfigurationError
 
@@ -79,18 +80,35 @@ class CryptoProvider:
     @staticmethod
     def compute_auth_tag(key: bytes, data: bytes) -> int:
         """计算 PTK7 文件级 HMAC-SHA256 认证标签（截断为 64 位）。"""
+        return CryptoProvider.compute_auth_tag_chunks(key, (data,))
+
+    @staticmethod
+    def compute_auth_tag_chunks(key: bytes, chunks: Iterable[bytes]) -> int:
+        """分块计算 PTK7 文件级认证标签，避免复制完整数据库。"""
         auth_key = hashlib.sha256(b"pytucky-ptk7-auth-key-v1\x00" + key).digest()
-        digest = hmac.new(
+        authenticator = hmac.new(
             auth_key,
-            b"pytucky-ptk7-auth-v1\x00" + data,
+            b"pytucky-ptk7-auth-v1\x00",
             hashlib.sha256,
-        ).digest()
+        )
+        for chunk in chunks:
+            authenticator.update(chunk)
+        digest = authenticator.digest()
         return int.from_bytes(digest[:8], "little")
 
     @staticmethod
     def verify_auth_tag(key: bytes, data: bytes, expected: int) -> bool:
         """使用常量时间比较验证 PTK7 文件级认证标签。"""
-        actual_bytes = CryptoProvider.compute_auth_tag(key, data).to_bytes(8, "little")
+        return CryptoProvider.verify_auth_tag_chunks(key, (data,), expected)
+
+    @staticmethod
+    def verify_auth_tag_chunks(
+        key: bytes,
+        chunks: Iterable[bytes],
+        expected: int,
+    ) -> bool:
+        """使用常量时间比较验证分块 PTK7 认证数据。"""
+        actual_bytes = CryptoProvider.compute_auth_tag_chunks(key, chunks).to_bytes(8, "little")
         expected_bytes = expected.to_bytes(8, "little")
         return hmac.compare_digest(actual_bytes, expected_bytes)
 

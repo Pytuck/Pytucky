@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import wraps
+from itertools import chain
 import os
 from pathlib import Path
 import struct
 from threading import RLock
-from typing import Any, BinaryIO, Callable, Concatenate, ParamSpec, TypeVar
+from typing import Any, BinaryIO, Callable, Concatenate, Iterator, ParamSpec, TypeVar
 
 from ..common.exceptions import (
     ConfigurationError,
@@ -77,6 +78,16 @@ NONE_NAME_MARKER = 0xFFFF
 FLAG_NULLABLE = 1 << 0
 FLAG_PRIMARY_KEY = 1 << 1
 FLAG_INDEXED = 1 << 2
+AUTH_READ_CHUNK_SIZE = 1024 * 1024
+
+
+def _iter_file_chunks(file_obj: BinaryIO) -> Iterator[bytes]:
+    """从当前位置开始以固定大小读取文件，供流式认证使用。"""
+    while True:
+        chunk = file_obj.read(AUTH_READ_CHUNK_SIZE)
+        if not chunk:
+            return
+        yield chunk
 
 @dataclass
 class TableOverlay:
@@ -223,11 +234,13 @@ class Store:
                     if header.checksum == 0:
                         raise EncryptionError("PTK7 HMAC 认证标签缺失")
                     file_obj.seek(HEADER_STRUCT.size)
-                    authenticated_body = file_obj.read()
-                    authenticated_data = header.with_checksum(0).pack() + authenticated_body
-                    if not CryptoProvider.verify_auth_tag(
+                    authenticated_chunks = chain(
+                        (header.with_checksum(0).pack(),),
+                        _iter_file_chunks(file_obj),
+                    )
+                    if not CryptoProvider.verify_auth_tag_chunks(
                         key,
-                        authenticated_data,
+                        authenticated_chunks,
                         header.checksum,
                     ):
                         raise EncryptionError("PTK7 文件完整性认证失败")
@@ -701,23 +714,23 @@ class Store:
             header = header.set_encryption(None)
             header = header.set_authentication(False)
 
-        file_body = b"".join(
-            [
-                crypto_meta.pack() if crypto_meta is not None else b"",
-                schema_catalog,
-                table_refs_blob_bytes,
-                payload_blob,
-            ]
+        file_body_chunks = (
+            crypto_meta.pack() if crypto_meta is not None else b"",
+            schema_catalog,
+            table_refs_blob_bytes,
+            payload_blob,
         )
         if crypto_meta is not None:
             assert key is not None
-            authenticated_data = header.with_checksum(0).pack() + file_body
             header = header.with_checksum(
-                CryptoProvider.compute_auth_tag(key, authenticated_data)
+                CryptoProvider.compute_auth_tag_chunks(
+                    key,
+                    (header.with_checksum(0).pack(), *file_body_chunks),
+                )
             )
 
         self.close()
-        _atomic_write(self.file_path, (header.pack(), file_body))
+        _atomic_write(self.file_path, (header.pack(), *file_body_chunks))
         self._cipher = cipher
         self._payload_offset = header.table_ref_offset + header.table_ref_size if cipher is not None else 0
         self._loaded_encryption_level = effective_encryption if crypto_meta is not None else None
