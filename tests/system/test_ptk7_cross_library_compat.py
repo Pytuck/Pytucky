@@ -109,3 +109,39 @@ def test_pytuck_write_then_pytucky_rewrite_then_pytuck_read(tmp_path: Path, leve
     r2 = db3.select('users', 2)
     assert r2['name'] == 'bob'
     db3.close()
+
+
+def test_pytuck_rich_schema_remains_compatible_after_pytucky_rewrite(tmp_path: Path) -> None:
+    syms = load_pytuck_symbols()
+    PytuckStorage = syms['Storage']
+    PytuckColumn = syms['Column']
+    PytuckyStorage = syms['PytuckyStorage']
+    file_path = tmp_path / 'rich-schema.pytuck'
+
+    source = PytuckStorage(file_path=str(file_path), engine='pytuck')
+    source.create_table(
+        'users',
+        [
+            PytuckColumn(int, name='id', primary_key=True),
+            PytuckColumn(str, name='name', index=True),
+            PytuckColumn(int, name='age', nullable=True, index='sorted'),
+        ],
+    )
+    source.create_table('events', [PytuckColumn(str, name='message')])
+    source.insert('users', {'name': 'Alice', 'age': None})
+    source.insert('users', {'name': 'Bob', 'age': 20})
+    source.insert('events', {'message': 'created'})
+    source.flush()
+    source.close()
+
+    rewritten = PytuckyStorage(file_path=str(file_path))
+    assert rewritten.select('users', 1)['name'] == 'Alice'
+    assert rewritten.select('events', 1)['message'] == 'created'
+    rewritten.update('users', 2, {'age': 21})
+    rewritten.flush()
+    rewritten.close()
+
+    reopened = PytuckStorage(file_path=str(file_path), engine='pytuck')
+    assert reopened.select('users', 2)['age'] == 21
+    assert reopened.select('events', 1)['message'] == 'created'
+    reopened.close()

@@ -14,6 +14,7 @@ PK_DIR_INT_STRUCT = struct.Struct("<qQI")
 TABLE_REF_PREFIX_STRUCT = struct.Struct("<H")
 TABLE_REF_BODY_STRUCT = struct.Struct("<QQQQQQQQQQ")
 NULL_BITMAP_STRUCT = struct.Struct("<I")
+MAX_PAYLOAD_COLUMNS = 32
 
 @dataclass(frozen=True)
 class FileHeader:
@@ -66,6 +67,26 @@ class FileHeader:
 
     def is_encrypted(self) -> bool:
         return (self.flags & self.FLAG_ENCRYPTION_ENABLED) != 0
+
+    def validate_layout(self, actual_file_size: int) -> None:
+        """校验文件头声明的元数据区域与实际单文件布局。"""
+        if self.file_size > actual_file_size:
+            raise SerializationError(
+                f"PTK7 file is truncated: header={self.file_size}, actual={actual_file_size}"
+            )
+        metadata_start = HEADER_STRUCT.size
+        if self.is_encrypted():
+            metadata_start += CRYPTO_META_STRUCT.size
+        schema_end = self.schema_offset + self.schema_size
+        table_ref_end = self.table_ref_offset + self.table_ref_size
+        if self.schema_offset < metadata_start:
+            raise SerializationError("PTK7 schema overlaps the file header or crypto metadata")
+        if schema_end > self.table_ref_offset:
+            raise SerializationError("PTK7 schema overlaps the table directory")
+        if table_ref_end > actual_file_size:
+            raise SerializationError("PTK7 table directory exceeds the file boundary")
+        if self.table_count and (self.schema_size == 0 or self.table_ref_size == 0):
+            raise SerializationError("PTK7 non-empty database is missing schema metadata")
 
     def get_encryption_level(self) -> str | None:
         if not self.is_encrypted():
@@ -291,7 +312,7 @@ def _payload_columns(columns: list[Column], pk_name: str | None) -> list[Column]
 
 def encode_row(columns: list[Column], record: dict[str, Any], pk_name: str | None = None) -> bytes:
     payload_columns = _payload_columns(columns, pk_name)
-    if len(payload_columns) > 32:
+    if len(payload_columns) > MAX_PAYLOAD_COLUMNS:
         raise SerializationError("encode_row currently supports at most 32 non-pk columns")
 
     null_bits = 0
@@ -315,10 +336,16 @@ def decode_row(
     codecs: list[Any] | None = None,
 ) -> dict[str, Any]:
     row_columns = payload_columns if payload_columns is not None else _payload_columns(columns, pk_name)
+    if len(row_columns) > MAX_PAYLOAD_COLUMNS:
+        raise SerializationError("decode_row currently supports at most 32 non-pk columns")
+    if codecs is not None and len(codecs) != len(row_columns):
+        raise SerializationError("PTK7 row codec layout does not match its columns")
     if len(payload) < NULL_BITMAP_STRUCT.size:
         raise SerializationError("Not enough data to decode row null bitmap")
 
     null_bits = NULL_BITMAP_STRUCT.unpack(payload[: NULL_BITMAP_STRUCT.size])[0]
+    if null_bits >> len(row_columns):
+        raise SerializationError("PTK7 row null bitmap references unknown columns")
     offset = NULL_BITMAP_STRUCT.size
     decoded: dict[str, Any] = {}
     for index, column in enumerate(row_columns):
@@ -341,4 +368,8 @@ def decode_row(
             )
         decoded[column.name] = value
         offset += consumed
+    if offset != len(payload):
+        raise SerializationError(
+            f"PTK7 row contains trailing bytes: decoded {offset}, payload {len(payload)}"
+        )
     return decoded

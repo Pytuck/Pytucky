@@ -52,7 +52,13 @@ def decode_sorted_pairs(blob: bytes, column: Column) -> list[tuple[Any, int]]:
         type_code, count = HEADER_STRUCT.unpack(blob[: HEADER_STRUCT.size])
     except struct.error as e:
         raise SerializationError('invalid header') from e
-    _, codec = TypeRegistry.get_codec_by_code(type_code)
+    try:
+        _, codec = TypeRegistry.get_codec_by_code(type_code)
+    except Exception as exc:
+        raise SerializationError(f'unknown index type code: {type_code}') from exc
+    minimum_entry_size = 1 + PK_STRUCT.size
+    if count > (len(blob) - HEADER_STRUCT.size) // minimum_entry_size:
+        raise SerializationError('index entry count exceeds blob capacity')
     offset = HEADER_STRUCT.size
     out: list[tuple[Any, int]] = []
     for _ in range(count):
@@ -61,6 +67,8 @@ def decode_sorted_pairs(blob: bytes, column: Column) -> list[tuple[Any, int]]:
             value, consumed = codec.decode(blob[offset:])
         except Exception as e:
             raise SerializationError('value decode failed') from e
+        if consumed <= 0 or offset + consumed > len(blob):
+            raise SerializationError('invalid index value length')
         offset += consumed
         if offset + PK_STRUCT.size > len(blob):
             raise SerializationError('truncated pk')
@@ -70,6 +78,8 @@ def decode_sorted_pairs(blob: bytes, column: Column) -> list[tuple[Any, int]]:
             raise SerializationError('invalid pk') from e
         offset += PK_STRUCT.size
         out.append((value, pk))
+    if offset != len(blob):
+        raise SerializationError('index blob contains trailing bytes')
     return out
 
 def search_sorted_pairs(blob: bytes, value: Any, column: Column) -> list[int]:

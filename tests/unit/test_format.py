@@ -125,6 +125,20 @@ def test_decode_row_wraps_invalid_string_payload() -> None:
         decode_row(columns, payload, pk_name="id")
 
 
+def test_decode_row_rejects_unknown_null_bits_and_trailing_bytes() -> None:
+    columns = [
+        Column(int, name="id", primary_key=True),
+        Column(str, name="name", nullable=True),
+    ]
+
+    with pytest.raises(SerializationError, match="unknown columns"):
+        decode_row(columns, b"\x02\x00\x00\x00", pk_name="id")
+
+    payload = encode_row(columns, {"id": 1, "name": "Alice"}, pk_name="id")
+    with pytest.raises(SerializationError, match="trailing bytes"):
+        decode_row(columns, payload + b"garbage", pk_name="id")
+
+
 
 def test_encode_row_skips_primary_key_payload() -> None:
     columns = [

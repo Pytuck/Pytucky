@@ -26,6 +26,7 @@ from .format import (
     PK_DIR_INT_STRUCT,
     ColumnIndexMeta,
     FileHeader,
+    MAX_PAYLOAD_COLUMNS,
     PkDirEntry,
     TableBlockRef,
     decode_row,
@@ -168,6 +169,10 @@ class Store:
 
     @_store_locked
     def _read_bytes_at(self, offset: int, size: int) -> bytes:
+        if offset < 0 or size < 0:
+            raise SerializationError(
+                f"PTK7 region has negative offset or size: offset={offset}, size={size}"
+            )
         reader = self._get_reader()
         reader.seek(offset)
         return reader.read(size)
@@ -198,6 +203,8 @@ class Store:
         self._loaded_encryption_level = None
         with self.file_path.open("rb") as file_obj:
             header = FileHeader.unpack(file_obj.read(HEADER_STRUCT.size))
+            actual_file_size = os.fstat(file_obj.fileno()).st_size
+            header.validate_layout(actual_file_size)
             if header.has_authentication() and not header.is_encrypted():
                 raise SerializationError("未加密 PTK7 文件不能声明 HMAC 认证")
             if header.is_encrypted():
@@ -233,13 +240,20 @@ class Store:
             # read schema and table refs (schema_offset may include crypto metadata)
             file_obj.seek(header.schema_offset)
             schema_blob = file_obj.read(header.schema_size)
+            if len(schema_blob) != header.schema_size:
+                raise SerializationError("PTK7 schema region is incomplete")
             schemas = self._decode_schema_catalog(schema_blob, header.table_count)
             file_obj.seek(header.table_ref_offset)
             table_ref_blob = file_obj.read(header.table_ref_size)
+            if len(table_ref_blob) != header.table_ref_size:
+                raise SerializationError("PTK7 table directory region is incomplete")
             refs = self._decode_table_refs(table_ref_blob, header.table_count)
 
             # payload offset is the area after table refs — set before reading pk dirs so pk_dir can be decrypted
             self._payload_offset = header.table_ref_offset + header.table_ref_size
+            self._validate_table_refs(refs, actual_file_size, self._payload_offset)
+            if set(schemas) != {ref.name for ref in refs}:
+                raise SerializationError("PTK7 schema tables do not match the table directory")
 
             tables: dict[str, TableState] = {}
             for ref in refs:
@@ -267,8 +281,60 @@ class Store:
                         )
                     meta_blob = self._decrypt_region(ref.index_meta_offset, meta_blob)
                     state.index_meta = self._decode_index_meta(meta_blob, ref)
+                    column_names = {column.name for column in columns}
+                    if not set(state.index_meta).issubset(column_names):
+                        raise SerializationError(
+                            f"PTK7 table {ref.name!r} contains an index for an unknown column"
+                        )
                 tables[ref.name] = state
             self._tables = tables
+
+    def _validate_table_refs(
+        self,
+        refs: list[TableBlockRef],
+        file_size: int,
+        payload_offset: int,
+    ) -> None:
+        """校验所有表块都位于当前单文件内且互不重叠。"""
+        names: set[str] = set()
+        regions: list[tuple[int, int, str]] = []
+        for ref in refs:
+            if not ref.name or ref.name in names:
+                raise SerializationError(f"PTK7 contains an empty or duplicate table name: {ref.name!r}")
+            names.add(ref.name)
+            expected_pk_dir_size = ref.record_count * PK_DIR_INT_STRUCT.size
+            if ref.pk_dir_size != expected_pk_dir_size:
+                raise SerializationError(
+                    f"PTK7 table {ref.name!r} pk directory size does not match record count"
+                )
+
+            table_regions = [
+                (ref.data_offset, ref.data_size, "data"),
+                (ref.pk_dir_offset, ref.pk_dir_size, "pk directory"),
+                (ref.index_meta_offset, ref.index_meta_size, "index metadata"),
+                (ref.index_data_offset, ref.index_data_size, "index data"),
+            ]
+            previous_end = payload_offset
+            for offset, size, label in table_regions:
+                end = offset + size
+                if offset < payload_offset or end > file_size:
+                    raise SerializationError(
+                        f"PTK7 table {ref.name!r} {label} region exceeds the file boundary"
+                    )
+                if offset < previous_end:
+                    raise SerializationError(
+                        f"PTK7 table {ref.name!r} {label} region overlaps a previous region"
+                    )
+                previous_end = end
+                if size:
+                    regions.append((offset, end, f"{ref.name}:{label}"))
+
+        regions.sort()
+        for previous, current in zip(regions, regions[1:]):
+            if current[0] < previous[1]:
+                raise SerializationError(
+                    f"PTK7 table regions overlap: {previous[2]} and {current[2]}"
+                )
 
     def _build_lazy_indexes(
         self,
@@ -947,34 +1013,60 @@ class Store:
         if stripped.startswith(b"{") or stripped.startswith(b"["):
             try:
                 parsed = json.loads(blob.decode("utf-8"))
-            except Exception:
-                # fall back to legacy parser
-                return self._decode_schema_catalog_legacy(blob, table_count)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise SerializationError("Invalid PTK7 JSON schema catalog") from exc
 
-            tables = {}
-            entries = []
+            entries: Any
             if isinstance(parsed, dict) and "tables" in parsed:
                 entries = parsed["tables"]
             elif isinstance(parsed, list):
                 entries = parsed
             else:
-                # unknown JSON shape, try legacy
-                return self._decode_schema_catalog_legacy(blob, table_count)
+                raise SerializationError("Invalid PTK7 JSON schema shape")
+            if not isinstance(entries, list) or len(entries) != table_count:
+                raise SerializationError("PTK7 schema table count does not match the header")
 
+            tables: dict[str, tuple[list[Column], str | None]] = {}
             for ent in entries:
                 try:
+                    if not isinstance(ent, dict):
+                        raise TypeError("table schema must be an object")
                     name = ent.get("name")
+                    if not isinstance(name, str) or not name or name in tables:
+                        raise ValueError("table name must be unique and non-empty")
                     pk = ent.get("primary_key")
-                    cols = []
-                    for c in ent.get("columns", []):
+                    if pk is not None and not isinstance(pk, str):
+                        raise TypeError("primary key name must be a string or null")
+                    raw_columns = ent.get("columns", [])
+                    if not isinstance(raw_columns, list):
+                        raise TypeError("columns must be a list")
+                    cols: list[Column] = []
+                    column_names: set[str] = set()
+                    for c in raw_columns:
+                        if not isinstance(c, dict):
+                            raise TypeError("column schema must be an object")
                         col_name = c.get("name")
+                        if (
+                            not isinstance(col_name, str)
+                            or not col_name
+                            or col_name in column_names
+                        ):
+                            raise ValueError("column name must be unique and non-empty")
+                        column_names.add(col_name)
                         type_name = c.get("type") or c.get("type_name")
+                        if not isinstance(type_name, str):
+                            raise TypeError("column type name must be a string")
+                        col_type = TypeRegistry.get_type_by_name(type_name)
+                        if TypeRegistry.get_type_name(col_type) != type_name:
+                            raise ValueError(f"unknown column type: {type_name}")
                         nullable = bool(c.get("nullable", True))
                         primary = bool(c.get("primary_key", False))
                         index = c.get("index", False)
+                        if index not in (False, True, "sorted"):
+                            raise ValueError("column index flag is invalid")
                         cols.append(
                             Column(
-                                TypeRegistry.get_type_by_name(type_name),
+                                col_type,
                                 name=col_name,
                                 nullable=nullable,
                                 primary_key=primary,
@@ -982,10 +1074,14 @@ class Store:
                                 comment=c.get("comment"),
                             )
                         )
+                    payload_column_count = sum(column.name != pk for column in cols)
+                    if payload_column_count > MAX_PAYLOAD_COLUMNS:
+                        raise ValueError("too many non-primary-key columns")
+                    if pk is not None and pk not in column_names:
+                        raise ValueError("primary key column is missing")
                     tables[name] = (cols, pk)
-                except Exception:
-                    # skip malformed entries
-                    continue
+                except (TypeError, ValueError, SerializationError) as exc:
+                    raise SerializationError("Invalid PTK7 table schema entry") from exc
             return tables
 
         # else legacy binary format
@@ -996,13 +1092,23 @@ class Store:
         schemas: dict[str, tuple[list[Column], str | None]] = {}
         for _ in range(table_count):
             table_name, offset = self._unpack_string(blob, offset)
+            if not table_name or table_name in schemas:
+                raise SerializationError("PTK7 legacy schema contains an invalid table name")
             primary_key_name, offset = self._unpack_optional_string(blob, offset)
+            if offset + U16_STRUCT.size > len(blob):
+                raise SerializationError("Not enough data to decode PTK7 column count")
             column_count = U16_STRUCT.unpack(blob[offset : offset + U16_STRUCT.size])[0]
             offset += U16_STRUCT.size
             columns: list[Column] = []
+            column_names: set[str] = set()
             for _ in range(column_count):
                 column_name, offset = self._unpack_string(blob, offset)
                 type_name, offset = self._unpack_string(blob, offset)
+                if not column_name or column_name in column_names:
+                    raise SerializationError("PTK7 legacy schema contains an invalid column name")
+                column_names.add(column_name)
+                if offset + COLUMN_FLAGS_STRUCT.size > len(blob):
+                    raise SerializationError("Not enough data to decode PTK7 column flags")
                 flags = COLUMN_FLAGS_STRUCT.unpack(blob[offset : offset + COLUMN_FLAGS_STRUCT.size])[0]
                 offset += COLUMN_FLAGS_STRUCT.size
                 columns.append(
@@ -1014,7 +1120,13 @@ class Store:
                         index=bool(flags & FLAG_INDEXED),
                     )
                 )
+            if sum(column.name != primary_key_name for column in columns) > MAX_PAYLOAD_COLUMNS:
+                raise SerializationError("PTK7 table contains too many non-primary-key columns")
+            if primary_key_name is not None and primary_key_name not in column_names:
+                raise SerializationError("PTK7 primary key column is missing")
             schemas[table_name] = (columns, primary_key_name)
+        if offset != len(blob):
+            raise SerializationError("PTK7 legacy schema contains trailing bytes")
         return schemas
 
     def _encode_table_schema(self, state: TableState) -> bytes:
@@ -1043,6 +1155,8 @@ class Store:
             ref, consumed = TableBlockRef.unpack(blob[offset:])
             refs.append(ref)
             offset += consumed
+        if offset != len(blob):
+            raise SerializationError("PTK7 table directory contains trailing bytes")
         return refs
 
     def _read_pk_dir(self, file_obj: Any, ref: TableBlockRef) -> dict[Any, tuple[int, int]]:
@@ -1067,22 +1181,37 @@ class Store:
         if len(blob) % entry_size != 0:
             raise SerializationError("PTK7 pk dir size is invalid")
 
-        data_end = ref.data_offset + max(1, ref.data_size)
-        needs_rebase = False
+        entries: list[PkDirEntry] = []
         offset = 0
         while offset < len(blob):
             entry = PkDirEntry.unpack_int(blob[offset : offset + entry_size])
-            if not (ref.data_offset <= entry.offset < data_end):
-                needs_rebase = True
+            if entry.pk in pk_index:
+                raise SerializationError("PTK7 pk directory contains duplicate primary keys")
+            entries.append(entry)
             pk_index[entry.pk] = (entry.offset, entry.length)
             offset += entry_size
 
-        if needs_rebase:
+        def is_absolute(entry: PkDirEntry) -> bool:
+            return (
+                entry.length >= ROW_LENGTH_STRUCT.size
+                and entry.offset >= ref.data_offset
+                and entry.offset + entry.length <= ref.data_offset + ref.data_size
+            )
+
+        def is_relative(entry: PkDirEntry) -> bool:
+            return (
+                entry.length >= ROW_LENGTH_STRUCT.size
+                and entry.offset + entry.length <= ref.data_size
+            )
+
+        if all(is_absolute(entry) for entry in entries):
+            return pk_index
+        if all(is_relative(entry) for entry in entries):
             return {
-                pk: (ref.data_offset + entry_offset, length)
-                for pk, (entry_offset, length) in pk_index.items()
+                entry.pk: (ref.data_offset + entry.offset, entry.length)
+                for entry in entries
             }
-        return pk_index
+        raise SerializationError("PTK7 pk directory contains an invalid row region")
 
     def _decode_index_meta(self, blob: bytes, ref: TableBlockRef) -> dict[str, ColumnIndexMeta]:
         import json
@@ -1091,16 +1220,29 @@ class Store:
         if stripped.startswith(b"{") or stripped.startswith(b"["):
             try:
                 parsed = json.loads(blob.decode("utf-8"))
-            except Exception:
-                parsed = None
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise SerializationError("Invalid PTK7 JSON index metadata") from exc
             if isinstance(parsed, list):
                 decoded: dict[str, ColumnIndexMeta] = {}
                 for entry in parsed:
+                    if not isinstance(entry, dict):
+                        raise SerializationError("PTK7 index metadata entry must be an object")
                     column_name = entry.get("column")
-                    if not column_name:
-                        continue
-                    rel_offset = int(entry.get("offset", 0))
-                    size = int(entry.get("size", 0))
+                    rel_offset = entry.get("offset", 0)
+                    size = entry.get("size", 0)
+                    if (
+                        not isinstance(column_name, str)
+                        or not column_name
+                        or column_name in decoded
+                        or not isinstance(rel_offset, int)
+                        or isinstance(rel_offset, bool)
+                        or not isinstance(size, int)
+                        or isinstance(size, bool)
+                        or rel_offset < 0
+                        or size < 0
+                        or rel_offset + size > ref.index_data_size
+                    ):
+                        raise SerializationError("PTK7 index metadata entry is invalid")
                     decoded[column_name] = ColumnIndexMeta(
                         column_name=column_name,
                         offset=ref.index_data_offset + rel_offset,
@@ -1109,11 +1251,18 @@ class Store:
                         type_code=0,
                     )
                 return decoded
+            raise SerializationError("Invalid PTK7 JSON index metadata shape")
 
         decoded = {}
         offset = 0
         while offset < len(blob):
             cim, consumed = ColumnIndexMeta.unpack(blob[offset:])
+            if (
+                not cim.column_name
+                or cim.column_name in decoded
+                or cim.offset + cim.size > ref.index_data_size
+            ):
+                raise SerializationError("PTK7 binary index metadata entry is invalid")
             decoded[cim.column_name] = ColumnIndexMeta(
                 column_name=cim.column_name,
                 offset=ref.index_data_offset + cim.offset,

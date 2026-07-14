@@ -1,6 +1,8 @@
 # 测试 PTK7 索引块原语（TDD）
 # 中文注释，英文标识符
 
+import pytest
+
 from pytucky.backends.index import (
     build_sorted_pairs,
     encode_sorted_pairs,
@@ -61,7 +63,6 @@ def test_range_search_inclusive_exclusive() -> None:
 def test_decode_truncated_header_raises() -> None:
     col = Column(int, name='x')
     # empty blob and too-short header should raise SerializationError
-    import pytest
     with pytest.raises(SerializationError):
         decode_sorted_pairs(b'', col)
     with pytest.raises(SerializationError):
@@ -74,6 +75,16 @@ def test_decode_truncated_pk_raises() -> None:
     blob = encode_sorted_pairs(pairs, col)
     # truncate the blob so pk bytes are missing
     truncated = blob[:-2]
-    import pytest
     with pytest.raises(SerializationError):
         decode_sorted_pairs(truncated, col)
+
+
+def test_decode_rejects_impossible_entry_count_and_trailing_bytes() -> None:
+    col = Column(int, name='x')
+    blob = encode_sorted_pairs([(1, 1)], col)
+
+    impossible_count = blob[:1] + (1000).to_bytes(4, 'little') + blob[5:]
+    with pytest.raises(SerializationError, match='entry count'):
+        decode_sorted_pairs(impossible_count, col)
+    with pytest.raises(SerializationError, match='trailing bytes'):
+        decode_sorted_pairs(blob + b'garbage', col)
